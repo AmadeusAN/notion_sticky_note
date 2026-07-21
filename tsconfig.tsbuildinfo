@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/main.tsx","./src/types.ts","./src/vite-env.d.ts","./src/components/settingspanel.tsx","./src/components/stickynote.tsx","./src/components/taskitem.tsx","./src/hooks/usenotephysics.ts","./src/physics/spring.ts","./src/services/tauriapi.ts","./src/stores/settingsstore.ts","./src/stores/taskstore.ts","./src/themes/index.ts"],"version":"5.8.3"}
