@@ -106,6 +106,12 @@ impl Database {
         if let Some(font) = self.get_setting("font")? {
             settings.font = font;
         }
+        if let Some(fx_theme) = self.get_setting("fx_theme")? {
+            settings.fx_theme = fx_theme;
+        }
+        if let Some(dock_handle) = self.get_setting("dock_handle")? {
+            settings.dock_handle = dock_handle;
+        }
         if let Some(raw) = self.get_setting("notion")? {
             if let Ok(cfg) = serde_json::from_str::<NotionConfig>(&raw) {
                 settings.notion = cfg;
@@ -133,6 +139,14 @@ impl Database {
 
     pub fn set_font(&self, font: &str) -> Result<(), String> {
         self.set_setting("font", font)
+    }
+
+    pub fn set_fx_theme(&self, theme: &str) -> Result<(), String> {
+        self.set_setting("fx_theme", theme)
+    }
+
+    pub fn set_dock_handle(&self, handle: &str) -> Result<(), String> {
+        self.set_setting("dock_handle", handle)
     }
 
     pub fn list_tasks(&self) -> Result<Vec<Task>, String> {

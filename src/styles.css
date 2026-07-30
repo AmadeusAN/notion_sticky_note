@@ -64,6 +64,13 @@ html[data-dock-edge="right"][data-dock-phase="collapsed"] .app-shell {
   padding-right: 0;
 }
 
+/* Collapsed: flush padding so the in-panel handle sits in the peek strip */
+html[data-dock-phase="collapsed"] .app-shell,
+html[data-dock-phase="collapsed"][data-surface="layered"] .app-shell,
+html[data-dock-phase="collapsed"][data-surface="motion"] .app-shell {
+  padding: 0 !important;
+}
+
 .sticky-note {
   position: relative;
   flex: 1;
@@ -859,50 +866,123 @@ html[data-dock-edge="right"][data-dock-phase="collapsed"] .app-shell {
   background-position: right 2px bottom 2px, right 2px bottom 2px;
 }
 
-/* Edge-dock strip affordance (QQ-style) */
+/*
+ * In-panel drawer handle: real .dock-tab node, only when collapsed.
+ * Peek (STRIP_PX) exposes the docked edge; capsule sits fully inside that strip.
+ */
 .dock-tab {
   display: none;
   position: absolute;
-  background: var(--note-pop, var(--note-accent));
-  box-shadow: 0 0 12px color-mix(in srgb, var(--note-pop, var(--note-accent)) 40%, transparent);
-  z-index: 5;
+  z-index: 20;
   pointer-events: auto;
+  box-sizing: border-box;
+  border-radius: 999px;
 }
 
 .sticky-note.dock-collapsed .dock-tab {
   display: block;
 }
 
+/* Hide note chrome while tucked — keep panel paper bg for the peek strip */
+.sticky-note.dock-collapsed .note-header,
+.sticky-note.dock-collapsed .task-list,
+.sticky-note.dock-collapsed .note-footer,
+.sticky-note.dock-collapsed .resize-handle {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* Hide paper dog-ear while collapsed so it doesn't fight the handle */
+.theme-paper .sticky-note.dock-collapsed::after {
+  display: none;
+}
+
+/* Short capsule centered on the desktop-facing (peek) edge */
 .sticky-note.dock-collapsed.dock-edge-left .dock-tab,
 .sticky-note.dock-collapsed.dock-edge-right .dock-tab {
-  top: 18%;
-  bottom: 18%;
-  width: 6px;
-  border-radius: 6px;
+  top: 50%;
+  bottom: auto;
+  width: 18px;
+  height: 104px;
+  max-height: 40%;
+  transform: translateY(-50%);
 }
 
 .sticky-note.dock-collapsed.dock-edge-left .dock-tab {
-  right: 2px;
+  right: 8px;
+  left: auto;
 }
 
 .sticky-note.dock-collapsed.dock-edge-right .dock-tab {
-  left: 2px;
+  left: 8px;
+  right: auto;
 }
 
 .sticky-note.dock-collapsed.dock-edge-top .dock-tab,
 .sticky-note.dock-collapsed.dock-edge-bottom .dock-tab {
-  left: 18%;
-  right: 18%;
-  height: 6px;
-  border-radius: 6px;
+  left: 50%;
+  right: auto;
+  width: 104px;
+  max-width: 40%;
+  height: 18px;
+  transform: translateX(-50%);
 }
 
 .sticky-note.dock-collapsed.dock-edge-top .dock-tab {
-  bottom: 2px;
+  bottom: 8px;
+  top: auto;
 }
 
 .sticky-note.dock-collapsed.dock-edge-bottom .dock-tab {
-  top: 2px;
+  top: 8px;
+  bottom: auto;
+}
+
+/* --- capsule: pop-colored pill --- */
+.sticky-note.dock-handle-capsule.dock-collapsed .dock-tab {
+  background: var(--note-pop, var(--note-accent));
+  border: 1px solid color-mix(in srgb, var(--note-pop, var(--note-accent)) 55%, #000);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, #fff 40%, transparent),
+    0 1px 4px color-mix(in srgb, var(--note-pop, var(--note-accent)) 35%, transparent);
+}
+
+/* --- paper: soft panel-colored capsule with pop rim --- */
+.sticky-note.dock-handle-paper.dock-collapsed .dock-tab {
+  background: var(--note-bg, #f6f0df);
+  border: 1px solid color-mix(in srgb, var(--note-pop, var(--note-accent)) 45%, var(--note-border, #cbb98a));
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, #fff 50%, transparent),
+    0 1px 4px rgba(40, 28, 8, 0.12);
+}
+
+/* --- grip: panel capsule + groove lines --- */
+.sticky-note.dock-handle-grip.dock-collapsed .dock-tab {
+  background: color-mix(in srgb, var(--note-bg, #f6f0df) 88%, var(--note-pop, var(--note-accent)));
+  border: 1px solid var(--note-border, #cbb98a);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 40%, transparent);
+}
+
+.sticky-note.dock-handle-grip.dock-collapsed.dock-edge-left .dock-tab,
+.sticky-note.dock-handle-grip.dock-collapsed.dock-edge-right .dock-tab {
+  background-image:
+    repeating-linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--note-pop, var(--note-accent)) 65%, transparent) 0 2px,
+      transparent 2px 7px
+    );
+  background-blend-mode: multiply;
+}
+
+.sticky-note.dock-handle-grip.dock-collapsed.dock-edge-top .dock-tab,
+.sticky-note.dock-handle-grip.dock-collapsed.dock-edge-bottom .dock-tab {
+  background-image:
+    repeating-linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--note-pop, var(--note-accent)) 65%, transparent) 0 2px,
+      transparent 2px 7px
+    );
+  background-blend-mode: multiply;
 }
 
 .sticky-note.dock-expanded {

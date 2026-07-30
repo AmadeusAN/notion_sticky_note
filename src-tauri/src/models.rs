@@ -73,11 +73,23 @@ pub struct AppSettings {
     pub dark_theme: String,
     #[serde(default = "default_font")]
     pub font: String,
+    #[serde(default = "default_fx_theme")]
+    pub fx_theme: String,
+    #[serde(default = "default_dock_handle")]
+    pub dock_handle: String,
     pub notion: NotionConfig,
 }
 
 fn default_font() -> String {
     "hand".into()
+}
+
+fn default_fx_theme() -> String {
+    "leaf".into()
+}
+
+fn default_dock_handle() -> String {
+    "grip".into()
 }
 
 fn default_light_theme() -> String {
@@ -95,6 +107,8 @@ impl Default for AppSettings {
             light_theme: default_light_theme(),
             dark_theme: default_dark_theme(),
             font: "hand".into(),
+            fx_theme: default_fx_theme(),
+            dock_handle: default_dock_handle(),
             notion: NotionConfig::default(),
         }
     }

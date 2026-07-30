@@ -7,3 +7,10 @@ export {
   type DockSnapshot,
   type PanelInset,
 } from "./types";
+export {
+  DEFAULT_FX_THEME,
+  fxThemes,
+  fxThemeIds,
+  normalizeFxThemeId,
+  type FxThemeId,
+} from "./themes";

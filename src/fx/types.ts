@@ -16,6 +16,7 @@ export const FX_EVENTS = {
   sync: "fx-sync",
   ambient: "fx-ambient",
   dock: "edge-dock-changed",
+  theme: "fx-theme-changed",
 } as const;
 
 export interface FxScatterPayload {

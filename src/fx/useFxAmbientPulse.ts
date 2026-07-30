@@ -1,7 +1,8 @@
 import { useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { rand } from "./theme/leaf";
+import { rand } from "./math";
 import type { DockEdge, DockPhase } from "./types";
+import { useSettingsStore } from "../stores/settingsStore";
 
 const EXPAND_FRINGE_DELAY_MS = 340;
 
@@ -11,13 +12,14 @@ function isTauri(): boolean {
 
 /**
  * Main-window hook: reliable timers that pulse ambient FX while docked.
- * No leaf DOM — visuals live entirely in the fx window.
+ * No particle DOM — visuals live entirely in the fx window.
  */
 export function useFxAmbientPulse(
   phase: DockPhase,
   edge: DockEdge | null,
 ) {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fxTheme = useSettingsStore((s) => s.fxTheme);
 
   useEffect(() => {
     if (timer.current) {
@@ -25,6 +27,7 @@ export function useFxAmbientPulse(
       timer.current = null;
     }
     if (!isTauri() || !edge) return;
+    if (fxTheme === "none") return;
     if (phase !== "collapsed" && phase !== "expanded") return;
 
     let cancelled = false;
@@ -56,5 +59,5 @@ export function useFxAmbientPulse(
       cancelled = true;
       if (timer.current) clearTimeout(timer.current);
     };
-  }, [phase, edge]);
+  }, [phase, edge, fxTheme]);
 }

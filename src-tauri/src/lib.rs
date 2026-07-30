@@ -16,7 +16,7 @@ use sync::SyncEngine;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Manager, State, WebviewWindow, WindowEvent,
+    AppHandle, Emitter, Manager, State, WebviewWindow, WindowEvent,
 };
 
 pub struct AppState {
@@ -103,6 +103,33 @@ fn set_dark_theme(theme: String, state: State<'_, AppState>) -> Result<(), Strin
 #[tauri::command]
 fn set_font(font: String, state: State<'_, AppState>) -> Result<(), String> {
     state.db.set_font(&font)
+}
+
+#[tauri::command]
+fn set_fx_theme(
+    theme: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let allowed = ["leaf", "sakura", "vine", "icicle", "rain", "snow", "none"];
+    if !allowed.contains(&theme.as_str()) {
+        return Err(format!("invalid fx theme: {theme}"));
+    }
+    state.db.set_fx_theme(&theme)?;
+    let _ = app.emit("fx-theme-changed", &theme);
+    if let Some(fx) = app.get_webview_window("fx") {
+        let _ = fx.emit("fx-theme-changed", &theme);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn set_dock_handle(handle: String, state: State<'_, AppState>) -> Result<(), String> {
+    let allowed = ["capsule", "paper", "grip"];
+    if !allowed.contains(&handle.as_str()) {
+        return Err(format!("invalid dock handle: {handle}"));
+    }
+    state.db.set_dock_handle(&handle)
 }
 
 #[tauri::command]
@@ -312,6 +339,8 @@ pub fn run() {
             set_light_theme,
             set_dark_theme,
             set_font,
+            set_fx_theme,
+            set_dock_handle,
             force_sync,
             test_notion_connection,
             get_edge_dock,

@@ -1,8 +1,10 @@
 /** Leaf theme particle helpers (scatter / bush / fall / fringe). */
 
 import type { DockEdge, PanelInset } from "../../types";
+import { clamp, rand } from "../../math";
 
 export type { DockEdge, PanelInset };
+export { rand } from "../../math";
 
 export interface LeafParticle {
   id: number;
@@ -46,10 +48,6 @@ const LEAF_COLORS = [
 let leafSeq = 0;
 export const nextLeafId = () => ++leafSeq;
 
-export function rand(min: number, max: number) {
-  return min + Math.random() * (max - min);
-}
-
 export function pickLeafColor() {
   return LEAF_COLORS[Math.floor(Math.random() * LEAF_COLORS.length)]!;
 }
@@ -75,10 +73,6 @@ function leafBase(
     dx: partial.dx,
     dy: partial.dy,
   };
-}
-
-function clamp(n: number, lo: number, hi: number) {
-  return Math.max(lo, Math.min(hi, n));
 }
 
 function alongEdge(t: number, start: number, span: number) {

@@ -29,6 +29,8 @@ export async function apiGetSettings(): Promise<AppSettings> {
       lightTheme: "paper",
       darkTheme: "dark",
       font: "hand",
+      fxTheme: "leaf",
+      dockHandle: "grip",
       notion: {
         token: "",
         databaseId: "",
@@ -67,6 +69,16 @@ export async function apiSetDarkTheme(theme: string): Promise<void> {
 export async function apiSetFont(font: string): Promise<void> {
   if (!isTauri()) return;
   await invoke("set_font", { font });
+}
+
+export async function apiSetFxTheme(theme: string): Promise<void> {
+  if (!isTauri()) return;
+  await invoke("set_fx_theme", { theme });
+}
+
+export async function apiSetDockHandle(handle: string): Promise<void> {
+  if (!isTauri()) return;
+  await invoke("set_dock_handle", { handle });
 }
 
 export async function apiForceSync(): Promise<string> {

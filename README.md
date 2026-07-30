@@ -12,7 +12,7 @@ Windows 写实便签桌面应用：置顶悬浮、多主题、与 Notion Databas
 - 本地 SQLite 缓存；勾选任务即时回写 Notion `done` / Status
 - 系统托盘：显示 / 隐藏 / 退出
 - 边缘吸附（类早期 QQ）：拖到屏幕边缘松手后收成细条，鼠标靠近弹出（果冻滑动）；拖离边缘恢复正常
-- 边缘贴边叶片特效（散布 / 长叶 fringe / 飘落）：独立透明特效窗绘制，可超出便签面板；鼠标穿透且保持在便签之上（不挡操作）
+- 边缘贴边氛围特效（叶片 / 樱花 / 藤蔓 / 冰锥贴边生长；雨滴 / 雪花仅飘落；可关闭）：独立透明特效窗绘制
 
 ## 环境要求
 
@@ -59,15 +59,17 @@ npm run tauri build
 ```
 src/
   App.tsx / components/   主窗 UI（便签、设置、任务列表）
-  fx/                     特效子系统（主窗零 leaf DOM）
-    FxHost.tsx            fx 透明窗入口
-    types.ts              事件契约：fx-scatter / fx-sync / fx-ambient
+  fx/                     特效子系统（主窗零粒子 DOM）
+    FxHost.tsx            fx 透明窗入口（按设置切换主题）
+    themes.ts             特效 id：leaf / sakura / vine / icicle / rain / snow / none
+    types.ts              事件契约：fx-scatter / fx-sync / fx-ambient / fx-theme-changed
     useFxAmbientPulse.ts  主窗定时 pulse（避免 fx 窗定时器被节流）
-    theme/leaf/           当前叶片皮肤（可整体替换）
-      LeafTheme.tsx       散布 / fringe / 飘落
-      LeafSvg.tsx         叶片图形
-      particles.ts        粒子与 fringe 生成
-      leaf.css
+    theme/leaf/           叶片（贴边 fringe）
+    theme/sakura/         樱花（贴边 fringe）
+    theme/vine/           藤蔓（贴边 fringe）
+    theme/icicle/         冰锥（贴边 fringe）
+    theme/rain/           雨滴（仅散布 + 飘落）
+    theme/snow/           雪花（仅散布 + 飘落）
 src-tauri/src/
   edge_dock.rs            边缘吸附相位与滑动动画
   fx_window.rs            特效窗几何 / 显隐 / 置顶层级 / emit（不关心画什么）
@@ -78,9 +80,11 @@ src-tauri/src/
 
 ### 特效架构（换皮肤）
 
-- **主窗**只跟踪 dock 相位，并通过 `useFxAmbientPulse` / Rust 发语义事件；不渲染叶片。
-- **fx 窗**（`label=fx`）铺在便签面板外扩一圈：鼠标穿透；Windows 下会保持在主窗之上，避免叶片被便签 HWND 挡住。
-- 换一套完整氛围：新增 `src/fx/theme/<name>/`，在 `FxHost.tsx` 里改用该主题即可；Rust 侧一般不用动。
+- **主窗**只跟踪 dock 相位，并通过 `useFxAmbientPulse` / Rust 发语义事件；不渲染粒子。
+- **fx 窗**（`label=fx`）铺在便签面板外扩一圈：鼠标穿透；Windows 下会保持在主窗之上，避免粒子被便签 HWND 挡住。
+- 设置里「贴边特效」可选叶片 / 樱花 / 藤蔓 / 冰锥 / 雨滴 / 雪花 / 关闭；写入 SQLite 后通过 `fx-theme-changed` 同步到 fx 窗。
+- 天气类主题（雨 / 雪）只有散布与环境飘落，**不**画 fringe；生长类（叶 / 樱 / 藤 / 冰锥）才挂贴边装饰。
+- 换一套完整氛围：新增 `src/fx/theme/<name>/`，在 `FxHost.tsx` / `themes.ts` 注册即可；Rust 侧一般不用动。
 
 事件：
 
@@ -89,13 +93,14 @@ src-tauri/src/
 | `fx-scatter` | 探出 / 探回散布 |
 | `fx-sync` | 特效窗对齐面板 / 显隐 |
 | `fx-ambient` | 时不时的飘落等环境特效 |
+| `fx-theme-changed` | 设置切换特效主题 |
 | `edge-dock-changed` | 贴边相位变化（fringe 时机） |
 
-命令：`pulse_fx_ambient`（主窗定时调用，驱动飘落）。
+命令：`pulse_fx_ambient`（主窗定时调用，驱动飘落）、`set_fx_theme`（持久化并广播主题）。
 
 ## 性能说明
 
 - 空闲轮询间隔 30s；未配置 Notion 时使用本地 mock，不发起网络请求。
 - 动画仅使用 `transform` / `opacity`。
-- 探出/探回散布约 24 片；环境飘落由主窗定时驱动。
+- 探出/探回散布约 22–28 片；环境飘落由主窗定时驱动（特效关闭时不 pulse）。
 - Glass 主题在部分远程桌面 / 旧 GPU 上 Acrylic 可能失败，会自动降级为半透明样式。

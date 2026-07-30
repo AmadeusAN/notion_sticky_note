@@ -1,0 +1,375 @@
+/* Vine FX theme — loaded only by the transparent fx overlay window. */
+
+.fx-root,
+.vine-theme {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+  pointer-events: none;
+  background: transparent;
+}
+
+html:has(.fx-root),
+html:has(.fx-root) body,
+html:has(.fx-root) #root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent !important;
+}
+
+.vine-particle {
+  position: absolute;
+  display: block;
+  transform: translate(-50%, -50%) rotate(var(--rot0)) scale(var(--scale));
+  will-change: transform, opacity;
+  filter: drop-shadow(0 1px 1px rgba(30, 70, 40, 0.25));
+}
+
+.vine-burst {
+  animation: vine-burst var(--dur) cubic-bezier(0.15, 0.75, 0.2, 1) forwards;
+}
+
+.vine-bush {
+  animation: vine-bush var(--dur) cubic-bezier(0.12, 0.8, 0.22, 1) forwards;
+  filter: drop-shadow(0 2px 3px rgba(30, 70, 40, 0.35));
+  z-index: 9;
+}
+
+.vine-burst.vine-rim {
+  animation-name: vine-burst-rim;
+}
+
+.vine-bush.vine-rim {
+  animation-name: vine-bush-rim;
+}
+
+.vine-fall {
+  animation: vine-fall var(--dur) ease-in forwards;
+  opacity: 0.85;
+}
+
+.vine-fringe {
+  position: absolute;
+  display: block;
+  width: 14px;
+  height: 28px;
+  filter: drop-shadow(0 1px 1px rgba(30, 70, 40, 0.22));
+}
+
+/* Fringe band anchored to the sticky-note panel rect inside the fx window */
+.fx-fringe-band {
+  position: absolute;
+  z-index: 30;
+  pointer-events: none;
+  overflow: visible;
+}
+
+/* --- top dock --- */
+.fx-fringe-band-top {
+  left: var(--panel-x);
+  width: var(--panel-w);
+}
+
+/* Screen: thin anchor on the docked outer edge of the panel */
+.fx-fringe-band-top.fx-fringe-screen {
+  top: var(--panel-y);
+  height: 0;
+}
+
+/* Strip: sit on the visible peek edge (bottom of top-docked note) */
+.fx-fringe-band-top.fx-fringe-strip {
+  top: calc(var(--panel-y) + var(--panel-h) - 32px);
+  height: 32px;
+}
+
+/* --- bottom dock --- */
+.fx-fringe-band-bottom {
+  left: var(--panel-x);
+  width: var(--panel-w);
+}
+
+.fx-fringe-band-bottom.fx-fringe-screen {
+  top: calc(var(--panel-y) + var(--panel-h));
+  height: 0;
+}
+
+.fx-fringe-band-bottom.fx-fringe-strip {
+  top: var(--panel-y);
+  height: 32px;
+}
+
+/* --- left dock --- */
+.fx-fringe-band-left {
+  top: var(--panel-y);
+  height: var(--panel-h);
+}
+
+.fx-fringe-band-left.fx-fringe-screen {
+  left: var(--panel-x);
+  width: 0;
+}
+
+.fx-fringe-band-left.fx-fringe-strip {
+  left: calc(var(--panel-x) + var(--panel-w) - 32px);
+  width: 32px;
+}
+
+/* --- right dock --- */
+.fx-fringe-band-right {
+  top: var(--panel-y);
+  height: var(--panel-h);
+}
+
+.fx-fringe-band-right.fx-fringe-screen {
+  left: calc(var(--panel-x) + var(--panel-w));
+  width: 0;
+}
+
+.fx-fringe-band-right.fx-fringe-strip {
+  left: var(--panel-x);
+  width: 32px;
+}
+
+.vine-edge-poke {
+  position: absolute;
+  display: block;
+  width: 16px;
+  height: 30px;
+  filter: drop-shadow(0 1px 2px rgba(30, 70, 40, 0.28));
+}
+
+.vine-edge-poke-top {
+  left: var(--along);
+  top: var(--offset);
+  transform: translateX(-50%) rotate(var(--rot)) scale(var(--scale));
+  transform-origin: center top;
+  animation: vine-edge-grow-top 520ms cubic-bezier(0.34, 1.55, 0.64, 1) both;
+}
+
+.vine-edge-poke-bottom {
+  left: var(--along);
+  bottom: var(--offset);
+  transform: translateX(-50%) rotate(var(--rot)) scale(var(--scale));
+  transform-origin: center bottom;
+  animation: vine-edge-grow-bottom 520ms cubic-bezier(0.34, 1.55, 0.64, 1) both;
+}
+
+.vine-edge-poke-left {
+  top: var(--along);
+  left: var(--offset);
+  transform: translateY(-50%) rotate(calc(var(--rot) + 90deg)) scale(var(--scale));
+  transform-origin: left center;
+  animation: vine-edge-grow-left 520ms cubic-bezier(0.34, 1.55, 0.64, 1) both;
+}
+
+.vine-edge-poke-right {
+  top: var(--along);
+  right: var(--offset);
+  transform: translateY(-50%) rotate(calc(var(--rot) - 90deg)) scale(var(--scale));
+  transform-origin: right center;
+  animation: vine-edge-grow-right 520ms cubic-bezier(0.34, 1.55, 0.64, 1) both;
+}
+
+@keyframes vine-edge-grow-top {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) rotate(var(--rot)) scaleY(0.08) scaleX(0.55);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) rotate(var(--rot)) scale(var(--scale));
+  }
+}
+
+@keyframes vine-edge-grow-bottom {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) rotate(var(--rot)) scaleY(0.08) scaleX(0.55);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) rotate(var(--rot)) scale(var(--scale));
+  }
+}
+
+@keyframes vine-edge-grow-left {
+  from {
+    opacity: 0;
+    transform: translateY(-50%) rotate(calc(var(--rot) + 90deg)) scaleX(0.08) scaleY(0.55);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(-50%) rotate(calc(var(--rot) + 90deg)) scale(var(--scale));
+  }
+}
+
+@keyframes vine-edge-grow-right {
+  from {
+    opacity: 0;
+    transform: translateY(-50%) rotate(calc(var(--rot) - 90deg)) scaleX(0.08) scaleY(0.55);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(-50%) rotate(calc(var(--rot) - 90deg)) scale(var(--scale));
+  }
+}
+
+.vine-fringe-top.vine-fringe-strip {
+  left: var(--along);
+  bottom: var(--offset);
+  top: auto;
+  right: auto;
+  transform-origin: center bottom;
+  animation: vine-fringe-pop-x 420ms cubic-bezier(0.34, 1.45, 0.64, 1) both;
+}
+
+.vine-fringe-bottom.vine-fringe-strip {
+  left: var(--along);
+  top: var(--offset);
+  bottom: auto;
+  right: auto;
+  transform-origin: center top;
+  animation: vine-fringe-pop-x 420ms cubic-bezier(0.34, 1.45, 0.64, 1) both;
+}
+
+.vine-fringe-left.vine-fringe-strip {
+  top: var(--along);
+  right: var(--offset);
+  left: auto;
+  bottom: auto;
+  transform-origin: right center;
+  animation: vine-fringe-pop-left 420ms cubic-bezier(0.34, 1.45, 0.64, 1) both;
+}
+
+.vine-fringe-right.vine-fringe-strip {
+  top: var(--along);
+  left: var(--offset);
+  right: auto;
+  bottom: auto;
+  transform-origin: left center;
+  animation: vine-fringe-pop-right 420ms cubic-bezier(0.34, 1.45, 0.64, 1) both;
+}
+
+@keyframes vine-burst {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) rotate(var(--rot0)) scale(calc(var(--scale) * 0.4));
+  }
+  18% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy)))
+      rotate(calc(var(--rot0) + var(--spin))) scale(calc(var(--scale) * 0.75));
+  }
+}
+
+@keyframes vine-burst-rim {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) rotate(var(--rot0)) scale(calc(var(--scale) * 0.35));
+  }
+  14% {
+    opacity: 0.9;
+  }
+  42% {
+    opacity: 0.45;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy)))
+      rotate(calc(var(--rot0) + var(--spin))) scale(calc(var(--scale) * 0.35));
+  }
+}
+
+@keyframes vine-bush {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) rotate(var(--rot0)) scale(calc(var(--scale) * 0.25));
+  }
+  12% {
+    opacity: 1;
+  }
+  55% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy)))
+      rotate(calc(var(--rot0) + var(--spin))) scale(calc(var(--scale) * 0.9));
+  }
+}
+
+@keyframes vine-bush-rim {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) rotate(var(--rot0)) scale(calc(var(--scale) * 0.2));
+  }
+  10% {
+    opacity: 0.95;
+  }
+  38% {
+    opacity: 0.5;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy)))
+      rotate(calc(var(--rot0) + var(--spin))) scale(calc(var(--scale) * 0.3));
+  }
+}
+
+@keyframes vine-fall {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) rotate(var(--rot0)) scale(var(--scale));
+  }
+  12% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy)))
+      rotate(calc(var(--rot0) + var(--spin))) scale(calc(var(--scale) * 0.85));
+  }
+}
+
+@keyframes vine-fringe-pop-x {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) rotate(var(--rot)) scale(0.15);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) rotate(var(--rot)) scale(var(--scale));
+  }
+}
+
+@keyframes vine-fringe-pop-left {
+  from {
+    opacity: 0;
+    transform: translateY(-50%) rotate(calc(var(--rot) + 90deg)) scale(0.15);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(-50%) rotate(calc(var(--rot) + 90deg)) scale(var(--scale));
+  }
+}
+
+@keyframes vine-fringe-pop-right {
+  from {
+    opacity: 0;
+    transform: translateY(-50%) rotate(calc(var(--rot) - 90deg)) scale(0.15);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(-50%) rotate(calc(var(--rot) - 90deg)) scale(var(--scale));
+  }
+}

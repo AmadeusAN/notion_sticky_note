@@ -7,9 +7,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewWindow};
 
-/// Visible fraction of the window when docked (~1/10 area → 1/10 of width or height).
-const STRIP_FRACTION: i32 = 10;
-const STRIP_MIN_PX: i32 = 36;
+/// Visible peek when collapsed — covers in-panel capsule (18px + inset) with margin.
+const STRIP_PX: i32 = 38;
 const EDGE_SNAP_PX: i32 = 28;
 const UNDOCK_PX: i32 = 72;
 const MOVE_DEBOUNCE_MS: u64 = 220;
@@ -18,11 +17,15 @@ const POLL_MS: u64 = 16;
 const SLIDE_DURATION_MS: u64 = 300;
 const SLIDE_FRAME_MS: u64 = 8;
 const SLIDE_IGNORE_MS: u64 = 360;
+/// After a jelly slide settles, keep poller from immediately re-expanding.
+const POST_SLIDE_IGNORE_MS: u64 = 450;
 /// Tiny leave debounce — just enough to avoid flicker when crossing the strip gap.
 const LEAVE_COLLAPSE_MS: u64 = 40;
 /// After expand starts, ignore leave until slide finishes (+settle) so mid-slide
 /// geometry doesn't false-trigger collapse → re-expand loops.
 const EXPAND_HOLD_MS: u64 = SLIDE_DURATION_MS + 100;
+/// After collapse starts, refuse expand until slide + grace so the handle can stick.
+const COLLAPSE_HOLD_MS: u64 = SLIDE_DURATION_MS + POST_SLIDE_IGNORE_MS;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -88,6 +91,8 @@ struct DockInner {
     ignore_moves_until: std::time::Instant,
     /// While expanded, refuse leave-collapse until this instant (anti re-trigger).
     expand_hold_until: std::time::Instant,
+    /// While collapsed, refuse approach-expand until this instant (anti re-trigger).
+    collapse_hold_until: std::time::Instant,
 }
 
 impl EdgeDock {
@@ -97,6 +102,7 @@ impl EdgeDock {
                 snapshot: DockSnapshot::default(),
                 ignore_moves_until: std::time::Instant::now(),
                 expand_hold_until: std::time::Instant::now(),
+                collapse_hold_until: std::time::Instant::now(),
             }),
             applying: AtomicBool::new(false),
             anim_token: AtomicU64::new(0),
@@ -132,6 +138,20 @@ impl EdgeDock {
             .lock()
             .map(|g| std::time::Instant::now() < g.expand_hold_until)
             .unwrap_or(false)
+    }
+
+    fn collapse_hold_active(&self) -> bool {
+        self.inner
+            .lock()
+            .map(|g| std::time::Instant::now() < g.collapse_hold_until)
+            .unwrap_or(false)
+    }
+
+    fn set_collapse_hold(&self, ms: u64) {
+        if let Ok(mut g) = self.inner.lock() {
+            g.collapse_hold_until =
+                std::time::Instant::now() + Duration::from_millis(ms);
+        }
     }
 
     fn should_ignore_move(&self) -> bool {
@@ -207,12 +227,14 @@ impl EdgeDock {
     ) {
         let Ok(from) = win.outer_position() else {
             let _ = win.set_position(tauri::Position::Physical(to));
+            self.set_ignore(POST_SLIDE_IGNORE_MS);
             self.applying.store(false, Ordering::SeqCst);
             self.sync_fx_after_move(&app, &win);
             return;
         };
         if (from.x - to.x).abs() <= 1 && (from.y - to.y).abs() <= 1 {
             let _ = win.set_position(tauri::Position::Physical(to));
+            self.set_ignore(POST_SLIDE_IGNORE_MS);
             self.applying.store(false, Ordering::SeqCst);
             self.sync_fx_after_move(&app, &win);
             return;
@@ -269,7 +291,7 @@ impl EdgeDock {
             let dock_final = Arc::clone(&dock);
             let _ = win.run_on_main_thread(move || {
                 let _ = win_final.set_position(tauri::Position::Physical(to));
-                dock_final.set_ignore(80);
+                dock_final.set_ignore(POST_SLIDE_IGNORE_MS);
                 dock_final.applying.store(false, Ordering::SeqCst);
                 dock_final.sync_fx_after_move(&app_final, &win_final);
             });
@@ -308,6 +330,8 @@ impl EdgeDock {
             g.snapshot.restored_y = pos.y;
             g.snapshot.edge = Some(edge);
             g.snapshot.phase = DockPhase::Collapsed;
+            g.collapse_hold_until =
+                std::time::Instant::now() + Duration::from_millis(COLLAPSE_HOLD_MS);
         }
 
         let Some(work) = monitor_work(win) else {
@@ -329,7 +353,7 @@ impl EdgeDock {
             return;
         }
         // Already sliding (expand or collapse) — don't restart
-        if self.applying.load(Ordering::SeqCst) {
+        if self.applying.load(Ordering::SeqCst) || self.collapse_hold_active() {
             return;
         }
 
@@ -383,6 +407,8 @@ impl EdgeDock {
 
         if let Ok(mut g) = self.inner.lock() {
             g.snapshot.phase = DockPhase::Collapsed;
+            g.collapse_hold_until =
+                std::time::Instant::now() + Duration::from_millis(COLLAPSE_HOLD_MS);
         }
         persist(app, &self.snapshot());
         emit(app, &self.snapshot());
@@ -428,6 +454,7 @@ impl EdgeDock {
         let docked = collapsed_position(edge, pos, size, &work);
         self.applying.store(true, Ordering::SeqCst);
         self.set_ignore(500);
+        self.set_collapse_hold(COLLAPSE_HOLD_MS);
         let _ = win.set_position(tauri::Position::Physical(docked));
         if let Ok(mut g) = self.inner.lock() {
             g.snapshot.phase = DockPhase::Collapsed;
@@ -456,9 +483,9 @@ impl EdgeDock {
                     continue;
                 }
 
-                // Mid-slide positions are unreliable — never expand/collapse here
+                // Mid-slide / grace / collapse-hold — don't expand/collapse here
                 // (avoids collapse→expand loops while the cursor stays put).
-                if dock.applying.load(Ordering::SeqCst) {
+                if dock.should_ignore_move() {
                     leave_since = None;
                     continue;
                 }
@@ -488,6 +515,9 @@ impl EdgeDock {
                 match snap.phase {
                     DockPhase::Collapsed => {
                         leave_since = None;
+                        if dock.collapse_hold_active() {
+                            continue;
+                        }
                         if near || over_window {
                             dock.expand_along_edge(&app, &win);
                         }
@@ -557,16 +587,13 @@ fn nearest_edge(
     candidates.into_iter().min_by_key(|(_, d)| *d)
 }
 
-fn strip_extent(edge: DockEdge, size: PhysicalSize<u32>) -> i32 {
-    let basis = match edge {
-        DockEdge::Left | DockEdge::Right => size.width as i32,
-        DockEdge::Top | DockEdge::Bottom => size.height as i32,
-    };
-    (basis / STRIP_FRACTION).max(STRIP_MIN_PX).min(basis.saturating_sub(8))
+fn strip_extent(_edge: DockEdge, _size: PhysicalSize<u32>) -> i32 {
+    STRIP_PX
 }
 
 fn approach_extent(edge: DockEdge, size: PhysicalSize<u32>) -> i32 {
-    (strip_extent(edge, size) / 2).max(20)
+    // Keep a usable hover zone even with a thin drawer handle.
+    (strip_extent(edge, size) * 2).max(28)
 }
 
 fn collapsed_position(

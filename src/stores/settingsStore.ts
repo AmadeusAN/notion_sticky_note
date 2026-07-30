@@ -2,6 +2,16 @@ import { create } from "zustand";
 import type { AppSettings, FontId, NotionConfig, ThemeId } from "../types";
 import { fonts, ensureFontLoaded } from "../fonts";
 import {
+  DEFAULT_FX_THEME,
+  normalizeFxThemeId,
+  type FxThemeId,
+} from "../fx/themes";
+import {
+  DEFAULT_DOCK_HANDLE,
+  normalizeDockHandleId,
+  type DockHandleId,
+} from "../dockHandles";
+import {
   DEFAULT_DARK_THEME,
   DEFAULT_LIGHT_THEME,
   getSystemThemeMode,
@@ -14,7 +24,9 @@ import {
   apiGetSettings,
   apiSaveNotionConfig,
   apiSetDarkTheme,
+  apiSetDockHandle,
   apiSetFont,
+  apiSetFxTheme,
   apiSetLightTheme,
   apiSetTheme,
   apiTestNotionConnection,
@@ -31,6 +43,8 @@ interface SettingsState extends AppSettings {
   setLightThemeLocal: (theme: ThemeId) => Promise<void>;
   setDarkThemeLocal: (theme: ThemeId) => Promise<void>;
   setFontLocal: (font: FontId) => Promise<void>;
+  setFxThemeLocal: (theme: FxThemeId) => Promise<void>;
+  setDockHandleLocal: (handle: DockHandleId) => Promise<void>;
   updateNotionDraft: (partial: Partial<NotionConfig>) => void;
   saveNotion: () => Promise<void>;
   testNotion: () => Promise<void>;
@@ -94,6 +108,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   lightTheme: DEFAULT_LIGHT_THEME,
   darkTheme: DEFAULT_DARK_THEME,
   font: "hand",
+  fxTheme: DEFAULT_FX_THEME,
+  dockHandle: DEFAULT_DOCK_HANDLE,
   notion: { ...defaultNotion },
   systemMode: getSystemThemeMode(),
   hydrated: false,
@@ -107,11 +123,15 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       const systemMode = getSystemThemeMode();
       const { lightTheme, darkTheme, theme } = coerceThemePair(settings);
       const font = (settings.font as FontId) || "hand";
+      const fxTheme = normalizeFxThemeId(settings.fxTheme);
+      const dockHandle = normalizeDockHandleId(settings.dockHandle);
       set({
         theme,
         lightTheme,
         darkTheme,
         font,
+        fxTheme,
+        dockHandle,
         notion: { ...defaultNotion, ...settings.notion },
         systemMode,
         hydrated: true,
@@ -137,6 +157,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         theme,
         lightTheme: DEFAULT_LIGHT_THEME,
         darkTheme: DEFAULT_DARK_THEME,
+        fxTheme: DEFAULT_FX_THEME,
+        dockHandle: DEFAULT_DOCK_HANDLE,
         systemMode,
         hydrated: true,
       });
@@ -194,6 +216,24 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     applyFontCss(font);
     try {
       await apiSetFont(font);
+    } catch {
+      /* ignore */
+    }
+  },
+
+  setFxThemeLocal: async (fxTheme) => {
+    set({ fxTheme });
+    try {
+      await apiSetFxTheme(fxTheme);
+    } catch {
+      /* ignore */
+    }
+  },
+
+  setDockHandleLocal: async (dockHandle) => {
+    set({ dockHandle });
+    try {
+      await apiSetDockHandle(dockHandle);
     } catch {
       /* ignore */
     }

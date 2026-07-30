@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { TaskItem } from "./TaskItem";
 import { useFxAmbientPulse, type DockEdge, type DockPhase } from "../fx";
 import { useTaskStore } from "../stores/taskStore";
+import { useSettingsStore } from "../stores/settingsStore";
 import { useNotePhysics } from "../hooks/useNotePhysics";
 
 interface Props {
@@ -24,6 +25,7 @@ export function StickyNote({ onOpenSettings }: Props) {
   const status = useTaskStore((s) => s.status);
   const lastError = useTaskStore((s) => s.lastError);
   const forceSync = useTaskStore((s) => s.forceSync);
+  const dockHandle = useSettingsStore((s) => s.dockHandle);
   const [dock, setDock] = useState<DockSnapshot>({ phase: "free", edge: null });
   const { ref } = useNotePhysics(dock.phase === "free");
 
@@ -72,8 +74,8 @@ export function StickyNote({ onOpenSettings }: Props) {
 
   const dockClass =
     dock.phase !== "free" && dock.edge
-      ? `dock-${dock.phase} dock-edge-${dock.edge}`
-      : "";
+      ? `dock-${dock.phase} dock-edge-${dock.edge} dock-handle-${dockHandle}`
+      : `dock-handle-${dockHandle}`;
 
   return (
     <div

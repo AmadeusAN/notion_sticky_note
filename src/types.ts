@@ -1,8 +1,12 @@
 import type { ThemeId } from "./themes";
 import type { FontId } from "./fonts";
+import type { FxThemeId } from "./fx/themes";
+import type { DockHandleId } from "./dockHandles";
 
 export type { ThemeId } from "./themes";
 export type { FontId } from "./fonts";
+export type { FxThemeId } from "./fx/themes";
+export type { DockHandleId } from "./dockHandles";
 
 export interface Task {
   id: string;
@@ -33,6 +37,8 @@ export interface AppSettings {
   lightTheme: ThemeId;
   darkTheme: ThemeId;
   font: FontId;
+  fxTheme: FxThemeId;
+  dockHandle: DockHandleId;
   notion: NotionConfig;
 }
 

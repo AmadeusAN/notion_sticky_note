@@ -5,6 +5,12 @@ import {
   type ThemeMode,
 } from "../themes";
 import { fonts, fontIds, type FontId } from "../fonts";
+import { fxThemes, fxThemeIds, type FxThemeId } from "../fx/themes";
+import {
+  dockHandles,
+  dockHandleIds,
+  type DockHandleId,
+} from "../dockHandles";
 import { useSettingsStore } from "../stores/settingsStore";
 
 interface Props {
@@ -103,6 +109,8 @@ export function SettingsPanel({ onClose }: Props) {
   const darkTheme = useSettingsStore((s) => s.darkTheme);
   const systemMode = useSettingsStore((s) => s.systemMode);
   const font = useSettingsStore((s) => s.font);
+  const fxTheme = useSettingsStore((s) => s.fxTheme);
+  const dockHandle = useSettingsStore((s) => s.dockHandle);
   const notion = useSettingsStore((s) => s.notion);
   const message = useSettingsStore((s) => s.message);
   const error = useSettingsStore((s) => s.error);
@@ -110,6 +118,8 @@ export function SettingsPanel({ onClose }: Props) {
   const setLightThemeLocal = useSettingsStore((s) => s.setLightThemeLocal);
   const setDarkThemeLocal = useSettingsStore((s) => s.setDarkThemeLocal);
   const setFontLocal = useSettingsStore((s) => s.setFontLocal);
+  const setFxThemeLocal = useSettingsStore((s) => s.setFxThemeLocal);
+  const setDockHandleLocal = useSettingsStore((s) => s.setDockHandleLocal);
   const updateNotionDraft = useSettingsStore((s) => s.updateNotionDraft);
   const saveNotion = useSettingsStore((s) => s.saveNotion);
   const testNotion = useSettingsStore((s) => s.testNotion);
@@ -163,6 +173,48 @@ export function SettingsPanel({ onClose }: Props) {
               <span style={{ fontFamily: fonts[font]?.family, marginLeft: 6 }}>
                 今日待办 · Sticky Note
               </span>
+            </p>
+          </div>
+        </section>
+
+        <section>
+          <div className="field">
+            <label>贴边特效</label>
+            <select
+              value={fxTheme}
+              onChange={(e) =>
+                void setFxThemeLocal(e.target.value as FxThemeId)
+              }
+            >
+              {fxThemeIds.map((id) => (
+                <option key={id} value={id}>
+                  {fxThemes[id].label}
+                </option>
+              ))}
+            </select>
+            <p className="hint" style={{ marginTop: 6 }}>
+              贴边生长：叶片 / 樱花 / 藤蔓 / 冰锥；飘落天气：雨滴 / 雪花（不挂面板）。
+            </p>
+          </div>
+        </section>
+
+        <section>
+          <div className="field">
+            <label>贴边扶手</label>
+            <select
+              value={dockHandle}
+              onChange={(e) =>
+                void setDockHandleLocal(e.target.value as DockHandleId)
+              }
+            >
+              {dockHandleIds.map((id) => (
+                <option key={id} value={id}>
+                  {dockHandles[id].label}
+                </option>
+              ))}
+            </select>
+            <p className="hint" style={{ marginTop: 6 }}>
+              {dockHandles[dockHandle]?.hint}
             </p>
           </div>
         </section>
