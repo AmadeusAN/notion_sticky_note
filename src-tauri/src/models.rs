@@ -75,6 +75,18 @@ pub struct AppSettings {
     pub font: String,
     #[serde(default = "default_fx_theme")]
     pub fx_theme: String,
+    #[serde(default = "default_fx_intensity")]
+    pub fx_intensity: f64,
+    #[serde(default = "default_fx_edge_boost")]
+    pub fx_edge_boost: bool,
+    #[serde(default = "default_note_bg")]
+    pub note_bg: String,
+    #[serde(default = "default_note_fg")]
+    pub note_fg: String,
+    #[serde(default = "default_note_accent")]
+    pub note_accent: String,
+    #[serde(default = "default_note_pop")]
+    pub note_pop: String,
     #[serde(default = "default_dock_handle")]
     pub dock_handle: String,
     pub notion: NotionConfig,
@@ -86,6 +98,30 @@ fn default_font() -> String {
 
 fn default_fx_theme() -> String {
     "leaf".into()
+}
+
+fn default_fx_intensity() -> f64 {
+    1.0
+}
+
+fn default_fx_edge_boost() -> bool {
+    true
+}
+
+fn default_note_bg() -> String {
+    "#f6f0df".into()
+}
+
+fn default_note_fg() -> String {
+    "#3a3226".into()
+}
+
+fn default_note_accent() -> String {
+    "#c4a35a".into()
+}
+
+fn default_note_pop() -> String {
+    "#e8a87c".into()
 }
 
 fn default_dock_handle() -> String {
@@ -108,10 +144,27 @@ impl Default for AppSettings {
             dark_theme: default_dark_theme(),
             font: "hand".into(),
             fx_theme: default_fx_theme(),
+            fx_intensity: default_fx_intensity(),
+            fx_edge_boost: default_fx_edge_boost(),
+            note_bg: default_note_bg(),
+            note_fg: default_note_fg(),
+            note_accent: default_note_accent(),
+            note_pop: default_note_pop(),
             dock_handle: default_dock_handle(),
             notion: NotionConfig::default(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FxAppearancePayload {
+    pub bg: String,
+    pub fg: String,
+    pub accent: String,
+    pub pop: String,
+    pub intensity: f64,
+    pub edge_boost: bool,
 }
 
 pub fn mock_tasks() -> Vec<Task> {

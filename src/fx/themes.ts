@@ -5,6 +5,8 @@ export type FxThemeId =
   | "icicle"
   | "rain"
   | "snow"
+  | "ink"
+  | "firefly"
   | "none";
 
 export const DEFAULT_FX_THEME: FxThemeId = "leaf";
@@ -19,6 +21,8 @@ export const fxThemes: Record<
   icicle: { id: "icicle", label: "冰锥" },
   rain: { id: "rain", label: "雨滴" },
   snow: { id: "snow", label: "雪花" },
+  ink: { id: "ink", label: "墨迹" },
+  firefly: { id: "firefly", label: "萤火" },
   none: { id: "none", label: "关闭" },
 };
 

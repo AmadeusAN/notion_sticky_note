@@ -717,6 +717,35 @@ html[data-dock-phase="collapsed"][data-surface="motion"] .app-shell {
   outline: none;
 }
 
+.field input[type="range"] {
+  padding: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  accent-color: #c45c26;
+  height: 22px;
+}
+
+.field input[type="range"]:focus {
+  border: none;
+  box-shadow: none;
+}
+
+.field .check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 0;
+  font-size: 13px;
+  color: #2a2418;
+  cursor: pointer;
+}
+
+.field .check-row input {
+  width: auto;
+  margin: 0;
+}
+
 .field input:focus,
 .field select:focus {
   border-color: #c45c26;

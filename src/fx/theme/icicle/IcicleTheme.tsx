@@ -10,65 +10,66 @@ import {
   type FxSyncPayload,
   type PanelInset,
 } from "../../types";
+import { WeatherCanvas } from "../../weather";
 import { IcicleSvg } from "./IcicleSvg";
 import {
-  makeBushPart,
-  makeExpandScatter,
-  makeFall,
+  computeFringeTips,
+  createIceAccentSim,
+} from "./iceAccentSim";
+import {
   makeFringe,
   type FringeIcicle,
   type FringeMode,
-  type IcicleParticle,
 } from "./particles";
 import "./icicle.css";
 
 const DEFAULT_PANEL: PanelInset = { x: 20, y: 20, w: 60, h: 60 };
 const EXPAND_FRINGE_DELAY_MS = 340;
-/** Wait for jelly slide (~300ms) before strip fringe so FX has re-laid out. */
 const COLLAPSE_STRIP_DELAY_MS = 340;
 
 /**
- * Icicle visual theme for the fx overlay window.
- * Swap this module to replace the entire dock effect skin.
+ * Crystal icicle theme — DOM fringe growth + canvas chips/drips.
  */
 export function IcicleTheme() {
-  const [particles, setParticles] = useState<IcicleParticle[]>([]);
   const [fringe, setFringe] = useState<FringeIcicle[]>([]);
   const [fringeMode, setFringeMode] = useState<FringeMode | null>(null);
   const [edge, setEdge] = useState<DockEdge | null>(null);
+  const [running, setRunning] = useState(true);
 
   const panelRef = useRef<PanelInset>(DEFAULT_PANEL);
   const [panel, setPanel] = useState<PanelInset>(DEFAULT_PANEL);
   const prevPhase = useRef<DockPhase>("free");
   const fringeModeRef = useRef<FringeMode | null>(null);
   const fringeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const spawn = (batch: IcicleParticle[]) => {
-    if (batch.length === 0) return;
-    setParticles((list) => [...list, ...batch]);
-    for (const spike of batch) {
-      window.setTimeout(() => {
-        setParticles((list) => list.filter((p) => p.id !== spike.id));
-      }, spike.durationMs + 80);
-    }
-  };
+  const fringeRef = useRef<FringeIcicle[]>([]);
+  const edgeRef = useRef<DockEdge | null>(null);
+  const modeRef = useRef<FringeMode | null>(null);
+  const sizeRef = useRef({ w: window.innerWidth, h: window.innerHeight });
+  const simRef = useRef(createIceAccentSim());
 
   const showFringe = (e: DockEdge, mode: FringeMode, count: number) => {
-    setFringe(makeFringe(e, mode, count));
+    const next = makeFringe(e, mode, count);
+    fringeRef.current = next;
+    setFringe(next);
     setFringeMode(mode);
     fringeModeRef.current = mode;
+    modeRef.current = mode;
     setEdge(e);
+    edgeRef.current = e;
   };
 
   const clearFringe = () => {
+    fringeRef.current = [];
     setFringe([]);
     setFringeMode(null);
     fringeModeRef.current = null;
+    modeRef.current = null;
   };
 
   useEffect(() => {
     const unsubs: Array<() => void> = [];
     let alive = true;
+    const sim = simRef.current;
 
     const add = async <T,>(
       event: string,
@@ -90,41 +91,53 @@ export function IcicleTheme() {
         panelRef.current = inset;
         setPanel(inset);
         setEdge(ed);
-
-        spawn(
-          kind === "collapse"
-            ? makeBushPart(ed, inset)
-            : makeExpandScatter(ed, inset),
-        );
+        edgeRef.current = ed;
+        sim.panel = inset;
+        sim.edge = ed;
+        const { w, h } = sizeRef.current;
+        sim.scatterChips(ed, kind, w, h);
       });
 
       await add<FxSyncPayload>(FX_EVENTS.sync, (e) => {
         const { active, edge: ed, panel: p } = e.payload;
+        sim.active = active;
+        setRunning(active);
         if (!active) {
           clearFringe();
           setEdge(null);
+          edgeRef.current = null;
+          sim.clear();
           return;
         }
-        if (ed) setEdge(ed);
+        if (ed) {
+          setEdge(ed);
+          edgeRef.current = ed;
+          sim.edge = ed;
+        }
         if (p && p.w > 0 && p.h > 0) {
           panelRef.current = p;
           setPanel(p);
+          sim.panel = p;
         }
       });
 
       await add<FxAmbientPayload>(FX_EVENTS.ambient, (e) => {
         const { edge: ed, phase } = e.payload;
-        if (!ed) return;
-        const inset = panelRef.current;
-        if (phase === "collapsed") {
-          const n = Math.random() < 0.45 ? 2 : 1;
-          spawn(
-            Array.from({ length: n }, () =>
-              makeFall(ed, "collapsed", inset),
-            ),
+        if (!ed || !sim.active) return;
+        edgeRef.current = ed;
+        setEdge(ed);
+        const { w, h } = sizeRef.current;
+        if (modeRef.current && fringeRef.current.length > 0) {
+          sim.fringeTips = computeFringeTips(
+            ed,
+            panelRef.current,
+            fringeRef.current,
+            modeRef.current,
+            w,
+            h,
           );
-        } else {
-          spawn([makeFall(ed, "expanded", inset)]);
+          const n = phase === "collapsed" ? (Math.random() < 0.45 ? 2 : 1) : 1;
+          sim.spawnDrips(n);
         }
       });
 
@@ -141,10 +154,12 @@ export function IcicleTheme() {
         if (phase === "free" || !ed) {
           clearFringe();
           setEdge(null);
+          edgeRef.current = null;
           return;
         }
 
         setEdge(ed);
+        edgeRef.current = ed;
 
         const toExpanded = was === "collapsed" && phase === "expanded";
         const toCollapsed =
@@ -153,13 +168,10 @@ export function IcicleTheme() {
 
         if (toExpanded) {
           clearFringe();
-          // After expand slide settles; FX was already laid out at the expanded rect.
           fringeTimer.current = setTimeout(() => {
             showFringe(ed, "screen", 13);
           }, EXPAND_FRINGE_DELAY_MS);
         } else if (toCollapsed) {
-          // Don't draw screen fringe mid-slide (FX stays put while main moves).
-          // Wait until slide + keep_fx_overlay, then grow strip at the peek edge.
           clearFringe();
           fringeTimer.current = setTimeout(() => {
             showFringe(ed, "strip", 12);
@@ -176,6 +188,7 @@ export function IcicleTheme() {
       alive = false;
       if (fringeTimer.current) clearTimeout(fringeTimer.current);
       for (const u of unsubs) u();
+      sim.clear();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -193,7 +206,7 @@ export function IcicleTheme() {
         <div
           className={`fx-fringe-band fx-fringe-band-${edge} fx-fringe-${fringeMode}`}
         >
-          {fringe.map((spike) => (
+          {fringe.map((spike, i) => (
             <span
               key={spike.id}
               className={
@@ -207,39 +220,30 @@ export function IcicleTheme() {
                   "--offset": `${spike.offset}px`,
                   "--rot": `${spike.rot}deg`,
                   "--scale": String(spike.scale),
+                  "--grow-delay": `${i * 28}ms`,
                 } as CSSProperties
               }
             >
-              <IcicleSvg color={spike.color} flip={spike.flip} />
+              <IcicleSvg
+                color={spike.color}
+                flip={spike.flip}
+                variant={spike.variant}
+              />
             </span>
           ))}
         </div>
       ) : null}
 
-      {particles.map((spike) => (
-        <span
-          key={spike.id}
-          className={`icicle-particle icicle-${spike.kind}${
-            (spike.rim ?? 0) > 0.35 ? " icicle-rim" : ""
-          }`}
-          style={
-            {
-              left: `${spike.x}%`,
-              top: `${spike.y}%`,
-              "--dx": `${spike.dx}px`,
-              "--dy": `${spike.dy}px`,
-              "--spin": `${spike.spin}deg`,
-              "--scale": String(spike.scale),
-              "--rot0": `${spike.rot}deg`,
-              "--dur": `${spike.durationMs}ms`,
-              width: spike.size,
-              height: spike.size * 3,
-            } as CSSProperties
-          }
-        >
-          <IcicleSvg color={spike.color} />
-        </span>
-      ))}
+      <WeatherCanvas
+        running={running}
+        onFrame={(ctx, dt, w, h) => {
+          sizeRef.current = { w, h };
+          const sim = simRef.current;
+          sim.panel = panelRef.current;
+          sim.step(dt, w, h);
+          sim.draw(ctx);
+        }}
+      />
     </div>
   );
 }

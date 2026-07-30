@@ -110,6 +110,8 @@ export function SettingsPanel({ onClose }: Props) {
   const systemMode = useSettingsStore((s) => s.systemMode);
   const font = useSettingsStore((s) => s.font);
   const fxTheme = useSettingsStore((s) => s.fxTheme);
+  const fxIntensity = useSettingsStore((s) => s.fxIntensity);
+  const fxEdgeBoost = useSettingsStore((s) => s.fxEdgeBoost);
   const dockHandle = useSettingsStore((s) => s.dockHandle);
   const notion = useSettingsStore((s) => s.notion);
   const message = useSettingsStore((s) => s.message);
@@ -119,6 +121,8 @@ export function SettingsPanel({ onClose }: Props) {
   const setDarkThemeLocal = useSettingsStore((s) => s.setDarkThemeLocal);
   const setFontLocal = useSettingsStore((s) => s.setFontLocal);
   const setFxThemeLocal = useSettingsStore((s) => s.setFxThemeLocal);
+  const setFxIntensityLocal = useSettingsStore((s) => s.setFxIntensityLocal);
+  const setFxEdgeBoostLocal = useSettingsStore((s) => s.setFxEdgeBoostLocal);
   const setDockHandleLocal = useSettingsStore((s) => s.setDockHandleLocal);
   const updateNotionDraft = useSettingsStore((s) => s.updateNotionDraft);
   const saveNotion = useSettingsStore((s) => s.saveNotion);
@@ -193,7 +197,41 @@ export function SettingsPanel({ onClose }: Props) {
               ))}
             </select>
             <p className="hint" style={{ marginTop: 6 }}>
-              贴边生长：叶片 / 樱花 / 藤蔓 / 冰锥；飘落天气：雨滴 / 雪花（不挂面板）。
+              生长：叶片 / 樱花 / 藤蔓 / 冰锥 / 墨迹；氛围：雨滴 / 雪花 / 萤火。
+            </p>
+          </div>
+          <div className="field" style={{ marginTop: 12 }}>
+            <label>
+              特效强度{" "}
+              <span style={{ opacity: 0.65 }}>
+                {Math.round(fxIntensity * 100)}%
+              </span>
+            </label>
+            <input
+              type="range"
+              min={40}
+              max={160}
+              step={5}
+              value={Math.round(fxIntensity * 100)}
+              onChange={(e) =>
+                void setFxIntensityLocal(Number(e.target.value) / 100)
+              }
+            />
+            <p className="hint" style={{ marginTop: 6 }}>
+              控制粒子密度与整体可见度；浅色便签会自动略加强对比。
+            </p>
+          </div>
+          <div className="field" style={{ marginTop: 12 }}>
+            <label className="check-row">
+              <input
+                type="checkbox"
+                checked={fxEdgeBoost}
+                onChange={(e) => void setFxEdgeBoostLocal(e.target.checked)}
+              />
+              边缘高对比
+            </label>
+            <p className="hint" style={{ marginTop: 6 }}>
+              只加强贴边 fringe / 近景粒子，避免整窗糊成雨幕。
             </p>
           </div>
         </section>

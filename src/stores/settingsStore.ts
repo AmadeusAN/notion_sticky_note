@@ -7,6 +7,11 @@ import {
   type FxThemeId,
 } from "../fx/themes";
 import {
+  DEFAULT_FX_EDGE_BOOST,
+  DEFAULT_FX_INTENSITY,
+  clampIntensity,
+} from "../fx/appearance";
+import {
   DEFAULT_DOCK_HANDLE,
   normalizeDockHandleId,
   type DockHandleId,
@@ -26,6 +31,8 @@ import {
   apiSetDarkTheme,
   apiSetDockHandle,
   apiSetFont,
+  apiSetFxEdgeBoost,
+  apiSetFxIntensity,
   apiSetFxTheme,
   apiSetLightTheme,
   apiSetTheme,
@@ -44,6 +51,8 @@ interface SettingsState extends AppSettings {
   setDarkThemeLocal: (theme: ThemeId) => Promise<void>;
   setFontLocal: (font: FontId) => Promise<void>;
   setFxThemeLocal: (theme: FxThemeId) => Promise<void>;
+  setFxIntensityLocal: (intensity: number) => Promise<void>;
+  setFxEdgeBoostLocal: (boost: boolean) => Promise<void>;
   setDockHandleLocal: (handle: DockHandleId) => Promise<void>;
   updateNotionDraft: (partial: Partial<NotionConfig>) => void;
   saveNotion: () => Promise<void>;
@@ -109,6 +118,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   darkTheme: DEFAULT_DARK_THEME,
   font: "hand",
   fxTheme: DEFAULT_FX_THEME,
+  fxIntensity: DEFAULT_FX_INTENSITY,
+  fxEdgeBoost: DEFAULT_FX_EDGE_BOOST,
   dockHandle: DEFAULT_DOCK_HANDLE,
   notion: { ...defaultNotion },
   systemMode: getSystemThemeMode(),
@@ -124,6 +135,15 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       const { lightTheme, darkTheme, theme } = coerceThemePair(settings);
       const font = (settings.font as FontId) || "hand";
       const fxTheme = normalizeFxThemeId(settings.fxTheme);
+      const fxIntensity = clampIntensity(
+        typeof settings.fxIntensity === "number"
+          ? settings.fxIntensity
+          : DEFAULT_FX_INTENSITY,
+      );
+      const fxEdgeBoost =
+        typeof settings.fxEdgeBoost === "boolean"
+          ? settings.fxEdgeBoost
+          : DEFAULT_FX_EDGE_BOOST;
       const dockHandle = normalizeDockHandleId(settings.dockHandle);
       set({
         theme,
@@ -131,6 +151,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         darkTheme,
         font,
         fxTheme,
+        fxIntensity,
+        fxEdgeBoost,
         dockHandle,
         notion: { ...defaultNotion, ...settings.notion },
         systemMode,
@@ -158,6 +180,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         lightTheme: DEFAULT_LIGHT_THEME,
         darkTheme: DEFAULT_DARK_THEME,
         fxTheme: DEFAULT_FX_THEME,
+        fxIntensity: DEFAULT_FX_INTENSITY,
+        fxEdgeBoost: DEFAULT_FX_EDGE_BOOST,
         dockHandle: DEFAULT_DOCK_HANDLE,
         systemMode,
         hydrated: true,
@@ -225,6 +249,25 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     set({ fxTheme });
     try {
       await apiSetFxTheme(fxTheme);
+    } catch {
+      /* ignore */
+    }
+  },
+
+  setFxIntensityLocal: async (raw) => {
+    const fxIntensity = clampIntensity(raw);
+    set({ fxIntensity });
+    try {
+      await apiSetFxIntensity(fxIntensity);
+    } catch {
+      /* ignore */
+    }
+  },
+
+  setFxEdgeBoostLocal: async (fxEdgeBoost) => {
+    set({ fxEdgeBoost });
+    try {
+      await apiSetFxEdgeBoost(fxEdgeBoost);
     } catch {
       /* ignore */
     }

@@ -109,6 +109,26 @@ impl Database {
         if let Some(fx_theme) = self.get_setting("fx_theme")? {
             settings.fx_theme = fx_theme;
         }
+        if let Some(raw) = self.get_setting("fx_intensity")? {
+            if let Ok(v) = raw.parse::<f64>() {
+                settings.fx_intensity = v.clamp(0.4, 1.6);
+            }
+        }
+        if let Some(raw) = self.get_setting("fx_edge_boost")? {
+            settings.fx_edge_boost = raw == "1" || raw.eq_ignore_ascii_case("true");
+        }
+        if let Some(v) = self.get_setting("note_bg")? {
+            settings.note_bg = v;
+        }
+        if let Some(v) = self.get_setting("note_fg")? {
+            settings.note_fg = v;
+        }
+        if let Some(v) = self.get_setting("note_accent")? {
+            settings.note_accent = v;
+        }
+        if let Some(v) = self.get_setting("note_pop")? {
+            settings.note_pop = v;
+        }
         if let Some(dock_handle) = self.get_setting("dock_handle")? {
             settings.dock_handle = dock_handle;
         }
@@ -143,6 +163,27 @@ impl Database {
 
     pub fn set_fx_theme(&self, theme: &str) -> Result<(), String> {
         self.set_setting("fx_theme", theme)
+    }
+
+    pub fn set_fx_intensity(&self, intensity: f64) -> Result<(), String> {
+        self.set_setting("fx_intensity", &intensity.clamp(0.4, 1.6).to_string())
+    }
+
+    pub fn set_fx_edge_boost(&self, boost: bool) -> Result<(), String> {
+        self.set_setting("fx_edge_boost", if boost { "1" } else { "0" })
+    }
+
+    pub fn set_note_palette(
+        &self,
+        bg: &str,
+        fg: &str,
+        accent: &str,
+        pop: &str,
+    ) -> Result<(), String> {
+        self.set_setting("note_bg", bg)?;
+        self.set_setting("note_fg", fg)?;
+        self.set_setting("note_accent", accent)?;
+        self.set_setting("note_pop", pop)
     }
 
     pub fn set_dock_handle(&self, handle: &str) -> Result<(), String> {

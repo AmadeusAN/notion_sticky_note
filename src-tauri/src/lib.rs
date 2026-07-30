@@ -8,7 +8,7 @@ mod window;
 
 use database::Database;
 use edge_dock::{DockEdge, DockPhase, DockSnapshot, EdgeDock};
-use models::{AppSettings, NotionConfig, Task};
+use models::{AppSettings, FxAppearancePayload, NotionConfig, Task};
 use notion::NotionClient;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -105,13 +105,33 @@ fn set_font(font: String, state: State<'_, AppState>) -> Result<(), String> {
     state.db.set_font(&font)
 }
 
+fn emit_fx_appearance(app: &AppHandle, payload: &FxAppearancePayload) {
+    let _ = app.emit("fx-appearance-changed", payload);
+    if let Some(fx) = app.get_webview_window("fx") {
+        let _ = fx.emit("fx-appearance-changed", payload);
+    }
+}
+
+fn appearance_from_settings(settings: &AppSettings) -> FxAppearancePayload {
+    FxAppearancePayload {
+        bg: settings.note_bg.clone(),
+        fg: settings.note_fg.clone(),
+        accent: settings.note_accent.clone(),
+        pop: settings.note_pop.clone(),
+        intensity: settings.fx_intensity,
+        edge_boost: settings.fx_edge_boost,
+    }
+}
+
 #[tauri::command]
 fn set_fx_theme(
     theme: String,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let allowed = ["leaf", "sakura", "vine", "icicle", "rain", "snow", "none"];
+    let allowed = [
+        "leaf", "sakura", "vine", "icicle", "rain", "snow", "ink", "firefly", "none",
+    ];
     if !allowed.contains(&theme.as_str()) {
         return Err(format!("invalid fx theme: {theme}"));
     }
@@ -120,6 +140,46 @@ fn set_fx_theme(
     if let Some(fx) = app.get_webview_window("fx") {
         let _ = fx.emit("fx-theme-changed", &theme);
     }
+    Ok(())
+}
+
+#[tauri::command]
+fn set_fx_intensity(
+    intensity: f64,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let v = intensity.clamp(0.4, 1.6);
+    state.db.set_fx_intensity(v)?;
+    let settings = state.db.load_settings()?;
+    emit_fx_appearance(&app, &appearance_from_settings(&settings));
+    Ok(())
+}
+
+#[tauri::command]
+fn set_fx_edge_boost(
+    boost: bool,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state.db.set_fx_edge_boost(boost)?;
+    let settings = state.db.load_settings()?;
+    emit_fx_appearance(&app, &appearance_from_settings(&settings));
+    Ok(())
+}
+
+#[tauri::command]
+fn sync_fx_palette(
+    bg: String,
+    fg: String,
+    accent: String,
+    pop: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state.db.set_note_palette(&bg, &fg, &accent, &pop)?;
+    let settings = state.db.load_settings()?;
+    emit_fx_appearance(&app, &appearance_from_settings(&settings));
     Ok(())
 }
 
@@ -340,6 +400,9 @@ pub fn run() {
             set_dark_theme,
             set_font,
             set_fx_theme,
+            set_fx_intensity,
+            set_fx_edge_boost,
+            sync_fx_palette,
             set_dock_handle,
             force_sync,
             test_notion_connection,

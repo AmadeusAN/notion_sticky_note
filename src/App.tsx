@@ -5,6 +5,7 @@ import { useTaskStore } from "./stores/taskStore";
 import { useSettingsStore } from "./stores/settingsStore";
 import { themes } from "./themes";
 import { fonts, ensureFontLoaded } from "./fonts";
+import { apiSyncFxPalette } from "./services/tauriApi";
 
 function App() {
   const [showSettings, setShowSettings] = useState(false);
@@ -69,6 +70,13 @@ function App() {
     );
     document.documentElement.dataset.motion =
       theme.surface === "motion" ? "on" : "off";
+
+    void apiSyncFxPalette({
+      bg: theme.background,
+      fg: theme.foreground,
+      accent: theme.accent,
+      pop: theme.pop,
+    });
   }, [theme, themeId]);
 
   useEffect(() => {

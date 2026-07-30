@@ -24,43 +24,12 @@ html:has(.fx-root) #root {
   background: transparent !important;
 }
 
-.icicle-particle {
-  position: absolute;
-  display: block;
-  transform: translate(-50%, -50%) rotate(var(--rot0)) scale(var(--scale));
-  will-change: transform, opacity;
-  filter: drop-shadow(0 1px 1px rgba(80, 130, 160, 0.25));
-}
-
-.icicle-burst {
-  animation: icicle-burst var(--dur) cubic-bezier(0.15, 0.75, 0.2, 1) forwards;
-}
-
-.icicle-bush {
-  animation: icicle-bush var(--dur) cubic-bezier(0.12, 0.8, 0.22, 1) forwards;
-  filter: drop-shadow(0 2px 3px rgba(80, 130, 160, 0.35));
-  z-index: 9;
-}
-
-.icicle-burst.icicle-rim {
-  animation-name: icicle-burst-rim;
-}
-
-.icicle-bush.icicle-rim {
-  animation-name: icicle-bush-rim;
-}
-
-.icicle-fall {
-  animation: icicle-fall var(--dur) ease-in forwards;
-  opacity: 0.85;
-}
-
 .icicle-fringe {
   position: absolute;
   display: block;
-  width: 10px;
-  height: 30px;
-  filter: drop-shadow(0 1px 1px rgba(80, 130, 160, 0.22));
+  width: 12px;
+  height: 36px;
+  filter: drop-shadow(0 1px 2px rgba(80, 130, 160, 0.28));
 }
 
 /* Fringe band anchored to the sticky-note panel rect inside the fx window */
@@ -140,9 +109,10 @@ html:has(.fx-root) #root {
 .icicle-edge-poke {
   position: absolute;
   display: block;
-  width: 11px;
-  height: 32px;
-  filter: drop-shadow(0 1px 2px rgba(80, 130, 160, 0.28));
+  width: 12px;
+  height: 38px;
+  filter: drop-shadow(0 1px 3px rgba(80, 130, 160, 0.32));
+  animation-delay: var(--grow-delay, 0ms);
 }
 
 .icicle-edge-poke-top {
@@ -150,7 +120,7 @@ html:has(.fx-root) #root {
   top: var(--offset);
   transform: translateX(-50%) rotate(var(--rot)) scale(var(--scale));
   transform-origin: center top;
-  animation: icicle-edge-grow-top 520ms cubic-bezier(0.34, 1.55, 0.64, 1) both;
+  animation: icicle-grow-top 720ms cubic-bezier(0.22, 1.15, 0.36, 1) both;
 }
 
 .icicle-edge-poke-bottom {
@@ -158,7 +128,7 @@ html:has(.fx-root) #root {
   bottom: var(--offset);
   transform: translateX(-50%) rotate(var(--rot)) scale(var(--scale));
   transform-origin: center bottom;
-  animation: icicle-edge-grow-bottom 520ms cubic-bezier(0.34, 1.55, 0.64, 1) both;
+  animation: icicle-grow-bottom 720ms cubic-bezier(0.22, 1.15, 0.36, 1) both;
 }
 
 .icicle-edge-poke-left {
@@ -166,7 +136,7 @@ html:has(.fx-root) #root {
   left: var(--offset);
   transform: translateY(-50%) rotate(calc(var(--rot) + 90deg)) scale(var(--scale));
   transform-origin: left center;
-  animation: icicle-edge-grow-left 520ms cubic-bezier(0.34, 1.55, 0.64, 1) both;
+  animation: icicle-grow-left 720ms cubic-bezier(0.22, 1.15, 0.36, 1) both;
 }
 
 .icicle-edge-poke-right {
@@ -174,50 +144,82 @@ html:has(.fx-root) #root {
   right: var(--offset);
   transform: translateY(-50%) rotate(calc(var(--rot) - 90deg)) scale(var(--scale));
   transform-origin: right center;
-  animation: icicle-edge-grow-right 520ms cubic-bezier(0.34, 1.55, 0.64, 1) both;
+  animation: icicle-grow-right 720ms cubic-bezier(0.22, 1.15, 0.36, 1) both;
 }
 
-@keyframes icicle-edge-grow-top {
-  from {
+@keyframes icicle-grow-top {
+  0% {
     opacity: 0;
-    transform: translateX(-50%) rotate(var(--rot)) scaleY(0.08) scaleX(0.55);
+    transform: translateX(-50%) rotate(var(--rot)) scaleY(0.06) scaleX(0.45);
   }
-  to {
+  55% {
+    opacity: 1;
+    transform: translateX(-50%) rotate(calc(var(--rot) + 2deg))
+      scaleY(calc(var(--scale) * 1.06)) scaleX(calc(var(--scale) * 0.96));
+  }
+  78% {
+    transform: translateX(-50%) rotate(calc(var(--rot) - 1.5deg))
+      scale(var(--scale));
+  }
+  100% {
     opacity: 1;
     transform: translateX(-50%) rotate(var(--rot)) scale(var(--scale));
   }
 }
 
-@keyframes icicle-edge-grow-bottom {
-  from {
+@keyframes icicle-grow-bottom {
+  0% {
     opacity: 0;
-    transform: translateX(-50%) rotate(var(--rot)) scaleY(0.08) scaleX(0.55);
+    transform: translateX(-50%) rotate(var(--rot)) scaleY(0.06) scaleX(0.45);
   }
-  to {
+  55% {
+    opacity: 1;
+    transform: translateX(-50%) rotate(calc(var(--rot) - 2deg))
+      scaleY(calc(var(--scale) * 1.06)) scaleX(calc(var(--scale) * 0.96));
+  }
+  78% {
+    transform: translateX(-50%) rotate(calc(var(--rot) + 1.5deg))
+      scale(var(--scale));
+  }
+  100% {
     opacity: 1;
     transform: translateX(-50%) rotate(var(--rot)) scale(var(--scale));
   }
 }
 
-@keyframes icicle-edge-grow-left {
-  from {
+@keyframes icicle-grow-left {
+  0% {
     opacity: 0;
-    transform: translateY(-50%) rotate(calc(var(--rot) + 90deg)) scaleX(0.08) scaleY(0.55);
+    transform: translateY(-50%) rotate(calc(var(--rot) + 90deg)) scaleX(0.06)
+      scaleY(0.45);
   }
-  to {
+  55% {
     opacity: 1;
-    transform: translateY(-50%) rotate(calc(var(--rot) + 90deg)) scale(var(--scale));
+    transform: translateY(-50%) rotate(calc(var(--rot) + 92deg))
+      scaleX(calc(var(--scale) * 1.06)) scaleY(calc(var(--scale) * 0.96));
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(-50%) rotate(calc(var(--rot) + 90deg))
+      scale(var(--scale));
   }
 }
 
-@keyframes icicle-edge-grow-right {
-  from {
+@keyframes icicle-grow-right {
+  0% {
     opacity: 0;
-    transform: translateY(-50%) rotate(calc(var(--rot) - 90deg)) scaleX(0.08) scaleY(0.55);
+    transform: translateY(-50%) rotate(calc(var(--rot) - 90deg)) scaleX(0.06)
+      scaleY(0.45);
   }
-  to {
+  55% {
     opacity: 1;
-    transform: translateY(-50%) rotate(calc(var(--rot) - 90deg)) scale(var(--scale));
+    transform: translateY(-50%) rotate(calc(var(--rot) - 92deg))
+      scaleX(calc(var(--scale) * 1.06)) scaleY(calc(var(--scale) * 0.96));
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(-50%) rotate(calc(var(--rot) - 90deg))
+      scale(var(--scale));
   }
 }
 
@@ -227,7 +229,8 @@ html:has(.fx-root) #root {
   top: auto;
   right: auto;
   transform-origin: center bottom;
-  animation: icicle-fringe-pop-x 420ms cubic-bezier(0.34, 1.45, 0.64, 1) both;
+  animation: icicle-strip-grow-x 680ms cubic-bezier(0.22, 1.15, 0.36, 1) both;
+  animation-delay: var(--grow-delay, 0ms);
 }
 
 .icicle-fringe-bottom.icicle-fringe-strip {
@@ -236,7 +239,8 @@ html:has(.fx-root) #root {
   bottom: auto;
   right: auto;
   transform-origin: center top;
-  animation: icicle-fringe-pop-x 420ms cubic-bezier(0.34, 1.45, 0.64, 1) both;
+  animation: icicle-strip-grow-x 680ms cubic-bezier(0.22, 1.15, 0.36, 1) both;
+  animation-delay: var(--grow-delay, 0ms);
 }
 
 .icicle-fringe-left.icicle-fringe-strip {
@@ -245,7 +249,8 @@ html:has(.fx-root) #root {
   left: auto;
   bottom: auto;
   transform-origin: right center;
-  animation: icicle-fringe-pop-left 420ms cubic-bezier(0.34, 1.45, 0.64, 1) both;
+  animation: icicle-strip-grow-left 680ms cubic-bezier(0.22, 1.15, 0.36, 1) both;
+  animation-delay: var(--grow-delay, 0ms);
 }
 
 .icicle-fringe-right.icicle-fringe-strip {
@@ -254,122 +259,59 @@ html:has(.fx-root) #root {
   right: auto;
   bottom: auto;
   transform-origin: left center;
-  animation: icicle-fringe-pop-right 420ms cubic-bezier(0.34, 1.45, 0.64, 1) both;
+  animation: icicle-strip-grow-right 680ms cubic-bezier(0.22, 1.15, 0.36, 1) both;
+  animation-delay: var(--grow-delay, 0ms);
 }
 
-@keyframes icicle-burst {
+@keyframes icicle-strip-grow-x {
   0% {
     opacity: 0;
-    transform: translate(-50%, -50%) rotate(var(--rot0)) scale(calc(var(--scale) * 0.4));
+    transform: translateX(-50%) rotate(var(--rot)) scaleY(0.08) scaleX(0.5);
   }
-  18% {
+  60% {
     opacity: 1;
+    transform: translateX(-50%) rotate(calc(var(--rot) + 1.5deg))
+      scaleY(calc(var(--scale) * 1.05)) scaleX(var(--scale));
   }
   100% {
-    opacity: 0;
-    transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy)))
-      rotate(calc(var(--rot0) + var(--spin))) scale(calc(var(--scale) * 0.75));
-  }
-}
-
-@keyframes icicle-burst-rim {
-  0% {
-    opacity: 0;
-    transform: translate(-50%, -50%) rotate(var(--rot0)) scale(calc(var(--scale) * 0.35));
-  }
-  14% {
-    opacity: 0.9;
-  }
-  42% {
-    opacity: 0.45;
-  }
-  100% {
-    opacity: 0;
-    transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy)))
-      rotate(calc(var(--rot0) + var(--spin))) scale(calc(var(--scale) * 0.35));
-  }
-}
-
-@keyframes icicle-bush {
-  0% {
-    opacity: 0;
-    transform: translate(-50%, -50%) rotate(var(--rot0)) scale(calc(var(--scale) * 0.25));
-  }
-  12% {
-    opacity: 1;
-  }
-  55% {
-    opacity: 1;
-  }
-  100% {
-    opacity: 0;
-    transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy)))
-      rotate(calc(var(--rot0) + var(--spin))) scale(calc(var(--scale) * 0.9));
-  }
-}
-
-@keyframes icicle-bush-rim {
-  0% {
-    opacity: 0;
-    transform: translate(-50%, -50%) rotate(var(--rot0)) scale(calc(var(--scale) * 0.2));
-  }
-  10% {
-    opacity: 0.95;
-  }
-  38% {
-    opacity: 0.5;
-  }
-  100% {
-    opacity: 0;
-    transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy)))
-      rotate(calc(var(--rot0) + var(--spin))) scale(calc(var(--scale) * 0.3));
-  }
-}
-
-@keyframes icicle-fall {
-  0% {
-    opacity: 0;
-    transform: translate(-50%, -50%) rotate(var(--rot0)) scale(var(--scale));
-  }
-  12% {
-    opacity: 0.9;
-  }
-  100% {
-    opacity: 0;
-    transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy)))
-      rotate(calc(var(--rot0) + var(--spin))) scale(calc(var(--scale) * 0.85));
-  }
-}
-
-@keyframes icicle-fringe-pop-x {
-  from {
-    opacity: 0;
-    transform: translateX(-50%) rotate(var(--rot)) scale(0.15);
-  }
-  to {
     opacity: 1;
     transform: translateX(-50%) rotate(var(--rot)) scale(var(--scale));
   }
 }
 
-@keyframes icicle-fringe-pop-left {
-  from {
+@keyframes icicle-strip-grow-left {
+  0% {
     opacity: 0;
-    transform: translateY(-50%) rotate(calc(var(--rot) + 90deg)) scale(0.15);
+    transform: translateY(-50%) rotate(calc(var(--rot) + 90deg)) scaleX(0.08)
+      scaleY(0.5);
   }
-  to {
+  60% {
     opacity: 1;
-    transform: translateY(-50%) rotate(calc(var(--rot) + 90deg)) scale(var(--scale));
+    transform: translateY(-50%) rotate(calc(var(--rot) + 91.5deg))
+      scale(var(--scale));
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(-50%) rotate(calc(var(--rot) + 90deg))
+      scale(var(--scale));
   }
 }
 
-@keyframes icicle-fringe-pop-right {
-  from {
+@keyframes icicle-strip-grow-right {
+  0% {
     opacity: 0;
-    transform: translateY(-50%) rotate(calc(var(--rot) - 90deg)) scale(0.15);
+    transform: translateY(-50%) rotate(calc(var(--rot) - 90deg)) scaleX(0.08)
+      scaleY(0.5);
   }
-  to {
+  60% {
     opacity: 1;
-    transform: translateY(-50%) rotate(calc(var(--rot) - 90deg)) scale(var(--scale));
+    transform: translateY(-50%) rotate(calc(var(--rot) - 91.5deg))
+      scale(var(--scale));
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(-50%) rotate(calc(var(--rot) - 90deg))
+      scale(var(--scale));
   }
 }
+

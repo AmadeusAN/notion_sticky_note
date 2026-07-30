@@ -38,6 +38,12 @@ export interface AppSettings {
   darkTheme: ThemeId;
   font: FontId;
   fxTheme: FxThemeId;
+  fxIntensity: number;
+  fxEdgeBoost: boolean;
+  noteBg?: string;
+  noteFg?: string;
+  noteAccent?: string;
+  notePop?: string;
   dockHandle: DockHandleId;
   notion: NotionConfig;
 }

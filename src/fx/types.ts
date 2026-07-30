@@ -17,7 +17,17 @@ export const FX_EVENTS = {
   ambient: "fx-ambient",
   dock: "edge-dock-changed",
   theme: "fx-theme-changed",
+  appearance: "fx-appearance-changed",
 } as const;
+
+export interface FxAppearancePayload {
+  bg: string;
+  fg: string;
+  accent: string;
+  pop: string;
+  intensity: number;
+  edgeBoost: boolean;
+}
 
 export interface FxScatterPayload {
   kind: "expand" | "collapse" | string;

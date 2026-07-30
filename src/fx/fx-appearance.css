@@ -1,0 +1,50 @@
+/* Shared FX appearance knobs — applied via documentElement CSS vars. */
+
+.fx-root {
+  --fx-intensity: 1;
+  --fx-near-mul: 1;
+  --fx-far-mul: 1;
+  --fx-edge-boost: 1;
+  --fx-alpha-mul: 1;
+}
+
+.fx-root .leaf-fringe,
+.fx-root .sakura-fringe,
+.fx-root .vine-fringe,
+.fx-root .icicle-fringe,
+.fx-root .ink-fringe,
+.fx-root .leaf-edge-poke,
+.fx-root .sakura-edge-poke,
+.fx-root .vine-edge-poke,
+.fx-root .icicle-edge-poke,
+.fx-root .ink-edge-poke {
+  opacity: calc(0.92 * var(--fx-intensity) * var(--fx-near-mul) * var(--fx-edge-boost));
+}
+
+html[data-fx-edge-boost="on"] .fx-root .leaf-fringe,
+html[data-fx-edge-boost="on"] .fx-root .sakura-fringe,
+html[data-fx-edge-boost="on"] .fx-root .vine-fringe,
+html[data-fx-edge-boost="on"] .fx-root .icicle-fringe,
+html[data-fx-edge-boost="on"] .fx-root .ink-fringe,
+html[data-fx-edge-boost="on"] .fx-root .leaf-edge-poke,
+html[data-fx-edge-boost="on"] .fx-root .sakura-edge-poke,
+html[data-fx-edge-boost="on"] .fx-root .vine-edge-poke,
+html[data-fx-edge-boost="on"] .fx-root .icicle-edge-poke,
+html[data-fx-edge-boost="on"] .fx-root .ink-edge-poke {
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.28))
+    drop-shadow(0 0 4px color-mix(in srgb, var(--fx-pop, #e8a87c) 35%, transparent));
+}
+
+.fx-root .leaf-particle,
+.fx-root .sakura-particle,
+.fx-root .vine-particle,
+.fx-root .icicle-particle,
+.fx-root .ink-particle {
+  opacity: calc(var(--fx-intensity) * var(--fx-alpha-mul));
+}
+
+html[data-fx-color-mode="on-light"] .fx-root .leaf-fringe,
+html[data-fx-color-mode="on-light"] .fx-root .sakura-fringe,
+html[data-fx-color-mode="on-light"] .fx-root .vine-fringe {
+  filter: drop-shadow(0 1px 1px rgba(20, 40, 20, 0.35));
+}

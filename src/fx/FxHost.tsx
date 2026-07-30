@@ -7,15 +7,36 @@ import { VineTheme } from "./theme/vine";
 import { IcicleTheme } from "./theme/icicle";
 import { RainTheme } from "./theme/rain";
 import { SnowTheme } from "./theme/snow";
+import { InkTheme } from "./theme/ink";
+import { FireflyTheme } from "./theme/firefly";
 import {
   DEFAULT_FX_THEME,
   normalizeFxThemeId,
   type FxThemeId,
 } from "./themes";
-import { FX_EVENTS } from "./types";
+import {
+  DEFAULT_FX_EDGE_BOOST,
+  DEFAULT_FX_INTENSITY,
+  clampIntensity,
+} from "./appearance";
+import { setFxAppearance } from "./appearanceStore";
+import { useFxAppearanceCss } from "./useFxAppearance";
+import { FX_EVENTS, type FxAppearancePayload } from "./types";
+import "./fx-appearance.css";
 
 function isTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+function applyAppearancePayload(p: FxAppearancePayload) {
+  setFxAppearance({
+    bg: p.bg,
+    fg: p.fg,
+    accent: p.accent,
+    pop: p.pop,
+    intensity: clampIntensity(p.intensity ?? DEFAULT_FX_INTENSITY),
+    edgeBoost: p.edgeBoost ?? DEFAULT_FX_EDGE_BOOST,
+  });
 }
 
 /**
@@ -23,32 +44,64 @@ function isTauri(): boolean {
  */
 export function FxHost() {
   const [theme, setTheme] = useState<FxThemeId>(DEFAULT_FX_THEME);
+  useFxAppearanceCss();
 
   useEffect(() => {
     let alive = true;
-    let unlisten: (() => void) | undefined;
+    const unsubs: Array<() => void> = [];
 
     void (async () => {
-      if (isTauri()) {
-        try {
-          const settings = await invoke<{ fxTheme?: string }>("get_settings");
-          if (alive) setTheme(normalizeFxThemeId(settings.fxTheme));
-        } catch {
-          /* keep default */
-        }
-        try {
-          unlisten = await listen<string>(FX_EVENTS.theme, (e) => {
+      if (!isTauri()) return;
+      try {
+        const settings = await invoke<{
+          fxTheme?: string;
+          fxIntensity?: number;
+          fxEdgeBoost?: boolean;
+          noteBg?: string;
+          noteFg?: string;
+          noteAccent?: string;
+          notePop?: string;
+        }>("get_settings");
+        if (!alive) return;
+        setTheme(normalizeFxThemeId(settings.fxTheme));
+        setFxAppearance({
+          bg: settings.noteBg ?? "#f6f0df",
+          fg: settings.noteFg ?? "#3a3226",
+          accent: settings.noteAccent ?? "#c4a35a",
+          pop: settings.notePop ?? "#e8a87c",
+          intensity: clampIntensity(
+            settings.fxIntensity ?? DEFAULT_FX_INTENSITY,
+          ),
+          edgeBoost: settings.fxEdgeBoost ?? DEFAULT_FX_EDGE_BOOST,
+        });
+      } catch {
+        /* keep default */
+      }
+
+      try {
+        unsubs.push(
+          await listen<string>(FX_EVENTS.theme, (e) => {
             setTheme(normalizeFxThemeId(e.payload));
-          });
-        } catch {
-          /* ignore */
-        }
+          }),
+        );
+      } catch {
+        /* ignore */
+      }
+
+      try {
+        unsubs.push(
+          await listen<FxAppearancePayload>(FX_EVENTS.appearance, (e) => {
+            applyAppearancePayload(e.payload);
+          }),
+        );
+      } catch {
+        /* ignore */
       }
     })();
 
     return () => {
       alive = false;
-      unlisten?.();
+      for (const u of unsubs) u();
     };
   }, []);
 
@@ -58,5 +111,7 @@ export function FxHost() {
   if (theme === "icicle") return <IcicleTheme />;
   if (theme === "rain") return <RainTheme />;
   if (theme === "snow") return <SnowTheme />;
+  if (theme === "ink") return <InkTheme />;
+  if (theme === "firefly") return <FireflyTheme />;
   return <LeafTheme />;
 }

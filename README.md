@@ -82,7 +82,7 @@ src-tauri/src/
 
 - **主窗**只跟踪 dock 相位，并通过 `useFxAmbientPulse` / Rust 发语义事件；不渲染粒子。
 - **fx 窗**（`label=fx`）铺在便签面板外扩一圈：鼠标穿透；Windows 下会保持在主窗之上，避免粒子被便签 HWND 挡住。
-- 设置里「贴边特效」可选叶片 / 樱花 / 藤蔓 / 冰锥 / 雨滴 / 雪花 / 关闭；写入 SQLite 后通过 `fx-theme-changed` 同步到 fx 窗。
+- 设置里「贴边特效」可选叶片 / 樱花 / 藤蔓 / 冰锥 / 墨迹 / 雨滴 / 雪花 / 萤火 / 关闭；并可调特效强度与边缘高对比。写入 SQLite 后通过 `fx-theme-changed` / `fx-appearance-changed` 同步到 fx 窗。
 - 天气类主题（雨 / 雪）只有散布与环境飘落，**不**画 fringe；生长类（叶 / 樱 / 藤 / 冰锥）才挂贴边装饰。
 - 换一套完整氛围：新增 `src/fx/theme/<name>/`，在 `FxHost.tsx` / `themes.ts` 注册即可；Rust 侧一般不用动。
 

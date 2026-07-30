@@ -30,6 +30,12 @@ export async function apiGetSettings(): Promise<AppSettings> {
       darkTheme: "dark",
       font: "hand",
       fxTheme: "leaf",
+      fxIntensity: 1,
+      fxEdgeBoost: true,
+      noteBg: "#f6f0df",
+      noteFg: "#3a3226",
+      noteAccent: "#c4a35a",
+      notePop: "#e8a87c",
       dockHandle: "grip",
       notion: {
         token: "",
@@ -74,6 +80,26 @@ export async function apiSetFont(font: string): Promise<void> {
 export async function apiSetFxTheme(theme: string): Promise<void> {
   if (!isTauri()) return;
   await invoke("set_fx_theme", { theme });
+}
+
+export async function apiSetFxIntensity(intensity: number): Promise<void> {
+  if (!isTauri()) return;
+  await invoke("set_fx_intensity", { intensity });
+}
+
+export async function apiSetFxEdgeBoost(boost: boolean): Promise<void> {
+  if (!isTauri()) return;
+  await invoke("set_fx_edge_boost", { boost });
+}
+
+export async function apiSyncFxPalette(payload: {
+  bg: string;
+  fg: string;
+  accent: string;
+  pop: string;
+}): Promise<void> {
+  if (!isTauri()) return;
+  await invoke("sync_fx_palette", payload);
 }
 
 export async function apiSetDockHandle(handle: string): Promise<void> {

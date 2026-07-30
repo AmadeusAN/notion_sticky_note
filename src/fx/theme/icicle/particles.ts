@@ -30,6 +30,7 @@ export interface FringeIcicle {
   scale: number;
   color: string;
   flip: boolean;
+  variant: number;
 }
 
 export type FringeMode = "strip" | "screen";
@@ -438,11 +439,12 @@ export function makeFringe(
     leaves.push({
       id: nextIcicleId(),
       along: ((i + 0.5) / count) * 100 + rand(-1.5, 1.5),
-      offset: mode === "screen" ? rand(-24, -8) : rand(2, 14),
-      rot: rand(-8, 8),
-      scale: rand(0.75, 1.4),
+      offset: mode === "screen" ? rand(-26, -6) : rand(2, 16),
+      rot: rand(-10, 10),
+      scale: rand(0.7, 1.55),
       color: pickIcicleColor(),
-      flip: false,
+      flip: Math.random() > 0.7,
+      variant: i % 3,
     });
   }
   return leaves;

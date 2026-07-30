@@ -1,0 +1,25 @@
+/* Firefly FX — canvas host. */
+
+.fx-root,
+.firefly-theme {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+  pointer-events: none;
+  background: transparent;
+}
+
+html:has(.fx-root),
+html:has(.fx-root) body,
+html:has(.fx-root) #root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent !important;
+}
