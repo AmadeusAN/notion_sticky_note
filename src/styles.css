@@ -46,6 +46,24 @@ textarea {
   display: flex;
 }
 
+/* Flush the docked edge so fringe sits on the real screen edge */
+html[data-dock-edge="top"][data-dock-phase="expanded"] .app-shell,
+html[data-dock-edge="top"][data-dock-phase="collapsed"] .app-shell {
+  padding-top: 0;
+}
+html[data-dock-edge="bottom"][data-dock-phase="expanded"] .app-shell,
+html[data-dock-edge="bottom"][data-dock-phase="collapsed"] .app-shell {
+  padding-bottom: 0;
+}
+html[data-dock-edge="left"][data-dock-phase="expanded"] .app-shell,
+html[data-dock-edge="left"][data-dock-phase="collapsed"] .app-shell {
+  padding-left: 0;
+}
+html[data-dock-edge="right"][data-dock-phase="expanded"] .app-shell,
+html[data-dock-edge="right"][data-dock-phase="collapsed"] .app-shell {
+  padding-right: 0;
+}
+
 .sticky-note {
   position: relative;
   flex: 1;

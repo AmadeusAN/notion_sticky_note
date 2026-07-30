@@ -185,11 +185,74 @@ impl NotionClient {
         completed: bool,
     ) -> Result<(), String> {
         let url = format!("https://api.notion.com/v1/pages/{page_id}");
+        let done_prop = if config.done_property.trim().is_empty() {
+            "done?".to_string()
+        } else {
+            config.done_property.trim().to_string()
+        };
+
+        let mut properties = json!({
+            done_prop.clone(): {
+                "checkbox": completed
+            }
+        });
+
+        // Mirror Notion Button automation: also set Status when configured.
+        let status_prop = config.status_property.trim();
+        if !status_prop.is_empty() {
+            let status_name = if completed {
+                config.status_done_value.trim()
+            } else {
+                config.status_todo_value.trim()
+            };
+            if !status_name.is_empty() {
+                properties[status_prop] = json!({
+                    "status": { "name": status_name }
+                });
+            }
+        }
+
+        let body = json!({ "properties": properties });
+        let res = self
+            .http
+            .patch(&url)
+            .headers(self.headers(&config.token)?)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        if !res.status().is_success() {
+            let status = res.status();
+            let text = res.text().await.unwrap_or_default();
+            // Status property may actually be Select in some databases.
+            if !status_prop.is_empty() && text.to_lowercase().contains("select") {
+                return self
+                    .set_done_with_select_status(config, page_id, completed, &done_prop)
+                    .await;
+            }
+            return Err(format!("Update failed ({status}): {text}"));
+        }
+        Ok(())
+    }
+
+    async fn set_done_with_select_status(
+        &self,
+        config: &NotionConfig,
+        page_id: &str,
+        completed: bool,
+        done_prop: &str,
+    ) -> Result<(), String> {
+        let url = format!("https://api.notion.com/v1/pages/{page_id}");
+        let status_prop = config.status_property.trim();
+        let status_name = if completed {
+            config.status_done_value.trim()
+        } else {
+            config.status_todo_value.trim()
+        };
         let body = json!({
             "properties": {
-                config.done_property.clone(): {
-                    "checkbox": completed
-                }
+                done_prop: { "checkbox": completed },
+                status_prop: { "select": { "name": status_name } }
             }
         });
         let res = self

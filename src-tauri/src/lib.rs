@@ -1,12 +1,13 @@
 mod database;
 mod edge_dock;
+mod fx_window;
 mod models;
 mod notion;
 mod sync;
 mod window;
 
 use database::Database;
-use edge_dock::{DockPhase, DockSnapshot, EdgeDock};
+use edge_dock::{DockEdge, DockPhase, DockSnapshot, EdgeDock};
 use models::{AppSettings, NotionConfig, Task};
 use notion::NotionClient;
 use std::path::PathBuf;
@@ -118,6 +119,19 @@ async fn test_notion_connection(config: NotionConfig) -> Result<String, String> 
 #[tauri::command]
 fn get_edge_dock(state: State<'_, AppState>) -> DockSnapshot {
     state.edge_dock.snapshot()
+}
+
+#[tauri::command]
+fn pulse_fx_ambient(app: AppHandle, edge: String, phase: String) -> Result<(), String> {
+    let dock_edge = match edge.as_str() {
+        "left" => DockEdge::Left,
+        "right" => DockEdge::Right,
+        "top" => DockEdge::Top,
+        "bottom" => DockEdge::Bottom,
+        _ => return Err(format!("invalid edge: {edge}")),
+    };
+    fx_window::pulse_fx_ambient(&app, dock_edge, &phase);
+    Ok(())
 }
 
 fn restore_window_geometry(win: &WebviewWindow, db: &Database) {
@@ -274,8 +288,16 @@ pub fn run() {
                         window::undo_system_snap_resize_if_needed(&win_clone);
                         save_window_geometry(&win_clone, &db_for_geo, &dock_for_events);
                     }
+                    WindowEvent::Focused(true) => {
+                        // Main activation can bury the FX topmost sibling — lift it back.
+                        fx_window::raise_fx_if_visible(&app_handle);
+                    }
                     _ => {}
                 });
+            }
+
+            if let Err(e) = fx_window::create_fx_window(app.handle()) {
+                eprintln!("fx window create failed: {e}");
             }
 
             setup_tray(app.handle())?;
@@ -292,7 +314,8 @@ pub fn run() {
             set_font,
             force_sync,
             test_notion_connection,
-            get_edge_dock
+            get_edge_dock,
+            pulse_fx_ambient
         ])
         .run(tauri::generate_context!())
         .expect("error while running sticky note");

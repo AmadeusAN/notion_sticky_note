@@ -2,15 +2,13 @@ import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { TaskItem } from "./TaskItem";
+import { useFxAmbientPulse, type DockEdge, type DockPhase } from "../fx";
 import { useTaskStore } from "../stores/taskStore";
 import { useNotePhysics } from "../hooks/useNotePhysics";
 
 interface Props {
   onOpenSettings: () => void;
 }
-
-type DockPhase = "free" | "collapsed" | "expanded";
-type DockEdge = "left" | "right" | "top" | "bottom";
 
 interface DockSnapshot {
   phase: DockPhase;
@@ -26,8 +24,10 @@ export function StickyNote({ onOpenSettings }: Props) {
   const status = useTaskStore((s) => s.status);
   const lastError = useTaskStore((s) => s.lastError);
   const forceSync = useTaskStore((s) => s.forceSync);
-  const { ref } = useNotePhysics(true);
   const [dock, setDock] = useState<DockSnapshot>({ phase: "free", edge: null });
+  const { ref } = useNotePhysics(dock.phase === "free");
+
+  useFxAmbientPulse(dock.phase, dock.edge);
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -47,6 +47,15 @@ export function StickyNote({ onOpenSettings }: Props) {
       unlisten?.();
     };
   }, []);
+
+  useEffect(() => {
+    document.documentElement.dataset.dockPhase = dock.phase;
+    document.documentElement.dataset.dockEdge = dock.edge ?? "";
+    return () => {
+      delete document.documentElement.dataset.dockPhase;
+      delete document.documentElement.dataset.dockEdge;
+    };
+  }, [dock.phase, dock.edge]);
 
   const openCount = tasks.filter((t) => !t.completed).length;
   const title =

@@ -23,10 +23,29 @@ pub struct NotionConfig {
     pub title_property: String,
     #[serde(default = "default_date_property")]
     pub date_property: String,
+    /// Notion Status (or Select) property to mirror when toggling done. Empty = skip.
+    #[serde(default = "default_status_property")]
+    pub status_property: String,
+    #[serde(default = "default_status_done_value")]
+    pub status_done_value: String,
+    #[serde(default = "default_status_todo_value")]
+    pub status_todo_value: String,
 }
 
 fn default_date_property() -> String {
     "Date".into()
+}
+
+fn default_status_property() -> String {
+    "Status".into()
+}
+
+fn default_status_done_value() -> String {
+    "Done".into()
+}
+
+fn default_status_todo_value() -> String {
+    "Not started".into()
 }
 
 impl Default for NotionConfig {
@@ -37,6 +56,9 @@ impl Default for NotionConfig {
             done_property: "done?".into(),
             title_property: "Name".into(),
             date_property: "Date".into(),
+            status_property: default_status_property(),
+            status_done_value: default_status_done_value(),
+            status_todo_value: default_status_todo_value(),
         }
     }
 }

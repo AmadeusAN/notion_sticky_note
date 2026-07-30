@@ -198,6 +198,36 @@ export function SettingsPanel({ onClose }: Props) {
             />
           </div>
           <div className="field" style={{ marginTop: 10 }}>
+            <label>Status 属性名（连带更新；留空跳过）</label>
+            <input
+              type="text"
+              value={notion.statusProperty}
+              onChange={(e) =>
+                updateNotionDraft({ statusProperty: e.target.value })
+              }
+            />
+          </div>
+          <div className="field" style={{ marginTop: 10 }}>
+            <label>完成时 Status 值</label>
+            <input
+              type="text"
+              value={notion.statusDoneValue}
+              onChange={(e) =>
+                updateNotionDraft({ statusDoneValue: e.target.value })
+              }
+            />
+          </div>
+          <div className="field" style={{ marginTop: 10 }}>
+            <label>取消完成时 Status 值</label>
+            <input
+              type="text"
+              value={notion.statusTodoValue}
+              onChange={(e) =>
+                updateNotionDraft({ statusTodoValue: e.target.value })
+              }
+            />
+          </div>
+          <div className="field" style={{ marginTop: 10 }}>
             <label>日期属性名</label>
             <input
               type="text"
@@ -218,8 +248,8 @@ export function SettingsPanel({ onClose }: Props) {
             />
           </div>
           <p className="hint" style={{ marginTop: 8 }}>
-            同步拉取：日期覆盖今天的任务。已完成的历史任务会跳过；未完成的跨天任务最多回看
-            60 天。默认完成字段 done?，日期字段 Date。
+            同步拉取：日期覆盖今天的任务。勾选时会写 checkbox（默认 done?），并连带更新
+            Status（默认 Done / Not started），对齐 Notion Button 自动化。
           </p>
         </section>
 

@@ -22,6 +22,10 @@ export interface NotionConfig {
   doneProperty: string;
   titleProperty: string;
   dateProperty: string;
+  /** Notion Status property mirrored on toggle; empty to skip */
+  statusProperty: string;
+  statusDoneValue: string;
+  statusTodoValue: string;
 }
 
 export interface AppSettings {

@@ -2,7 +2,7 @@
 //! expand on cursor approach, undock when dragged away from the edge.
 
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewWindow};
@@ -13,8 +13,16 @@ const STRIP_MIN_PX: i32 = 36;
 const EDGE_SNAP_PX: i32 = 28;
 const UNDOCK_PX: i32 = 72;
 const MOVE_DEBOUNCE_MS: u64 = 220;
-const LEAVE_COLLAPSE_MS: u64 = 450;
-const POLL_MS: u64 = 40;
+const POLL_MS: u64 = 16;
+/// Fixed-duration jelly (ease-out-back), paced for ~120Hz displays.
+const SLIDE_DURATION_MS: u64 = 300;
+const SLIDE_FRAME_MS: u64 = 8;
+const SLIDE_IGNORE_MS: u64 = 360;
+/// Tiny leave debounce — just enough to avoid flicker when crossing the strip gap.
+const LEAVE_COLLAPSE_MS: u64 = 40;
+/// After expand starts, ignore leave until slide finishes (+settle) so mid-slide
+/// geometry doesn't false-trigger collapse → re-expand loops.
+const EXPAND_HOLD_MS: u64 = SLIDE_DURATION_MS + 100;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -70,12 +78,16 @@ struct MonitorWork {
 pub struct EdgeDock {
     inner: Mutex<DockInner>,
     applying: AtomicBool,
+    /// Bumped to cancel an in-flight slide animation.
+    anim_token: AtomicU64,
 }
 
 struct DockInner {
     snapshot: DockSnapshot,
     /// Suppress move-debounce while we programmatically move the window
     ignore_moves_until: std::time::Instant,
+    /// While expanded, refuse leave-collapse until this instant (anti re-trigger).
+    expand_hold_until: std::time::Instant,
 }
 
 impl EdgeDock {
@@ -84,8 +96,10 @@ impl EdgeDock {
             inner: Mutex::new(DockInner {
                 snapshot: DockSnapshot::default(),
                 ignore_moves_until: std::time::Instant::now(),
+                expand_hold_until: std::time::Instant::now(),
             }),
             applying: AtomicBool::new(false),
+            anim_token: AtomicU64::new(0),
         })
     }
 
@@ -111,6 +125,13 @@ impl EdgeDock {
             g.ignore_moves_until =
                 std::time::Instant::now() + Duration::from_millis(ms);
         }
+    }
+
+    fn expand_hold_active(&self) -> bool {
+        self.inner
+            .lock()
+            .map(|g| std::time::Instant::now() < g.expand_hold_until)
+            .unwrap_or(false)
     }
 
     fn should_ignore_move(&self) -> bool {
@@ -139,7 +160,7 @@ impl EdgeDock {
         });
     }
 
-    fn evaluate_after_move(&self, app: &AppHandle, win: &WebviewWindow) {
+    fn evaluate_after_move(self: &Arc<Self>, app: &AppHandle, win: &WebviewWindow) {
         let Ok(pos) = win.outer_position() else {
             return;
         };
@@ -177,17 +198,108 @@ impl EdgeDock {
         }
     }
 
+    /// Ease-out-back jelly slide on a dedicated thread; positions applied on the UI thread.
+    fn slide_window_to(
+        self: &Arc<Self>,
+        app: AppHandle,
+        win: WebviewWindow,
+        to: PhysicalPosition<i32>,
+    ) {
+        let Ok(from) = win.outer_position() else {
+            let _ = win.set_position(tauri::Position::Physical(to));
+            self.applying.store(false, Ordering::SeqCst);
+            self.sync_fx_after_move(&app, &win);
+            return;
+        };
+        if (from.x - to.x).abs() <= 1 && (from.y - to.y).abs() <= 1 {
+            let _ = win.set_position(tauri::Position::Physical(to));
+            self.applying.store(false, Ordering::SeqCst);
+            self.sync_fx_after_move(&app, &win);
+            return;
+        }
+
+        let token = self.anim_token.fetch_add(1, Ordering::SeqCst) + 1;
+        self.applying.store(true, Ordering::SeqCst);
+        // Only suppress drag-edge evaluation — cursor poller still runs for leave/collapse.
+        self.set_ignore(SLIDE_IGNORE_MS);
+        let dock = Arc::clone(self);
+
+        std::thread::spawn(move || {
+            let start = std::time::Instant::now();
+            let duration = Duration::from_millis(SLIDE_DURATION_MS);
+            let dx = (to.x - from.x) as f64;
+            let dy = (to.y - from.y) as f64;
+            let mut frame: u64 = 0;
+
+            loop {
+                if dock.anim_token.load(Ordering::SeqCst) != token {
+                    return;
+                }
+
+                let elapsed = start.elapsed();
+                let t = (elapsed.as_secs_f64() / duration.as_secs_f64()).min(1.0);
+                let p = ease_out_back(t);
+                let pos = PhysicalPosition {
+                    x: (from.x as f64 + dx * p).round() as i32,
+                    y: (from.y as f64 + dy * p).round() as i32,
+                };
+
+                let win_for_pos = win.clone();
+                let _ = win.run_on_main_thread(move || {
+                    let _ = win_for_pos.set_position(tauri::Position::Physical(pos));
+                });
+
+                if t >= 1.0 {
+                    break;
+                }
+
+                frame += 1;
+                let target = start + Duration::from_millis(frame * SLIDE_FRAME_MS);
+                let now = std::time::Instant::now();
+                if target > now {
+                    std::thread::sleep(target - now);
+                }
+            }
+
+            if dock.anim_token.load(Ordering::SeqCst) != token {
+                return;
+            }
+            let win_final = win.clone();
+            let app_final = app.clone();
+            let dock_final = Arc::clone(&dock);
+            let _ = win.run_on_main_thread(move || {
+                let _ = win_final.set_position(tauri::Position::Physical(to));
+                dock_final.set_ignore(80);
+                dock_final.applying.store(false, Ordering::SeqCst);
+                dock_final.sync_fx_after_move(&app_final, &win_final);
+            });
+        });
+    }
+
+    fn sync_fx_after_move(&self, app: &AppHandle, win: &WebviewWindow) {
+        let snap = self.snapshot();
+        match (snap.phase, snap.edge) {
+            (DockPhase::Collapsed | DockPhase::Expanded, Some(edge)) => {
+                let Ok(pos) = win.outer_position() else {
+                    return;
+                };
+                let Ok(size) = win.outer_size() else {
+                    return;
+                };
+                crate::fx_window::keep_fx_overlay(app, pos, size, edge);
+            }
+            _ => crate::fx_window::hide_fx(app),
+        }
+    }
+
     fn collapse_to_edge(
-        &self,
+        self: &Arc<Self>,
         app: &AppHandle,
         win: &WebviewWindow,
         edge: DockEdge,
         pos: PhysicalPosition<i32>,
         size: PhysicalSize<u32>,
     ) {
-        self.applying.store(true, Ordering::SeqCst);
-        self.set_ignore(400);
-
         {
             let mut g = self.inner.lock().unwrap();
             g.snapshot.restored_width = size.width.max(100);
@@ -199,17 +311,16 @@ impl EdgeDock {
         }
 
         let Some(work) = monitor_work(win) else {
-            self.applying.store(false, Ordering::SeqCst);
             return;
         };
         let docked = collapsed_position(edge, pos, size, &work);
-        let _ = win.set_position(tauri::Position::Physical(docked));
         persist(app, &self.snapshot());
         emit(app, &self.snapshot());
-        self.applying.store(false, Ordering::SeqCst);
+        crate::fx_window::play_fx_scatter(app, edge, "collapse", pos, size);
+        self.slide_window_to(app.clone(), win.clone(), docked);
     }
 
-    fn expand_along_edge(&self, app: &AppHandle, win: &WebviewWindow) {
+    fn expand_along_edge(self: &Arc<Self>, app: &AppHandle, win: &WebviewWindow) {
         let snap = self.snapshot();
         let Some(edge) = snap.edge else {
             return;
@@ -217,35 +328,36 @@ impl EdgeDock {
         if snap.phase == DockPhase::Expanded {
             return;
         }
-
-        self.applying.store(true, Ordering::SeqCst);
-        self.set_ignore(350);
+        // Already sliding (expand or collapse) — don't restart
+        if self.applying.load(Ordering::SeqCst) {
+            return;
+        }
 
         let Ok(pos) = win.outer_position() else {
-            self.applying.store(false, Ordering::SeqCst);
             return;
         };
         let Ok(size) = win.outer_size() else {
-            self.applying.store(false, Ordering::SeqCst);
             return;
         };
         let Some(work) = monitor_work(win) else {
-            self.applying.store(false, Ordering::SeqCst);
             return;
         };
 
         let expanded = expanded_position(edge, pos, size, &work);
-        let _ = win.set_position(tauri::Position::Physical(expanded));
 
         if let Ok(mut g) = self.inner.lock() {
             g.snapshot.phase = DockPhase::Expanded;
+            g.expand_hold_until =
+                std::time::Instant::now() + Duration::from_millis(EXPAND_HOLD_MS);
         }
         persist(app, &self.snapshot());
         emit(app, &self.snapshot());
-        self.applying.store(false, Ordering::SeqCst);
+        // Size FX to where the panel will rest (expanded), not the tucked strip.
+        crate::fx_window::play_fx_scatter(app, edge, "expand", expanded, size);
+        self.slide_window_to(app.clone(), win.clone(), expanded);
     }
 
-    fn collapse_again(&self, app: &AppHandle, win: &WebviewWindow) {
+    fn collapse_again(self: &Arc<Self>, app: &AppHandle, win: &WebviewWindow) {
         let snap = self.snapshot();
         let Some(edge) = snap.edge else {
             return;
@@ -253,35 +365,34 @@ impl EdgeDock {
         if snap.phase != DockPhase::Expanded {
             return;
         }
-
-        self.applying.store(true, Ordering::SeqCst);
-        self.set_ignore(350);
+        if self.applying.load(Ordering::SeqCst) || self.expand_hold_active() {
+            return;
+        }
 
         let Ok(pos) = win.outer_position() else {
-            self.applying.store(false, Ordering::SeqCst);
             return;
         };
         let Ok(size) = win.outer_size() else {
-            self.applying.store(false, Ordering::SeqCst);
             return;
         };
         let Some(work) = monitor_work(win) else {
-            self.applying.store(false, Ordering::SeqCst);
             return;
         };
 
         let docked = collapsed_position(edge, pos, size, &work);
-        let _ = win.set_position(tauri::Position::Physical(docked));
 
         if let Ok(mut g) = self.inner.lock() {
             g.snapshot.phase = DockPhase::Collapsed;
         }
         persist(app, &self.snapshot());
         emit(app, &self.snapshot());
-        self.applying.store(false, Ordering::SeqCst);
+        crate::fx_window::play_fx_scatter(app, edge, "collapse", pos, size);
+        self.slide_window_to(app.clone(), win.clone(), docked);
     }
 
     fn undock(&self, app: &AppHandle, win: &WebviewWindow) {
+        // Cancel any in-flight jelly slide
+        self.anim_token.fetch_add(1, Ordering::SeqCst);
         self.applying.store(true, Ordering::SeqCst);
         self.set_ignore(300);
         if let Ok(mut g) = self.inner.lock() {
@@ -292,6 +403,7 @@ impl EdgeDock {
         let _ = win;
         persist(app, &self.snapshot());
         emit(app, &self.snapshot());
+        crate::fx_window::hide_fx(app);
         self.applying.store(false, Ordering::SeqCst);
     }
 
@@ -322,6 +434,7 @@ impl EdgeDock {
         }
         emit(app, &self.snapshot());
         self.applying.store(false, Ordering::SeqCst);
+        self.sync_fx_after_move(app, win);
     }
 
     pub fn spawn_cursor_poller(self: &Arc<Self>, app: AppHandle) {
@@ -336,12 +449,16 @@ impl EdgeDock {
                 if !win.is_visible().unwrap_or(false) {
                     continue;
                 }
-                if dock.should_ignore_move() {
-                    continue;
-                }
 
                 let snap = dock.snapshot();
                 if snap.phase == DockPhase::Free {
+                    leave_since = None;
+                    continue;
+                }
+
+                // Mid-slide positions are unreliable — never expand/collapse here
+                // (avoids collapse→expand loops while the cursor stays put).
+                if dock.applying.load(Ordering::SeqCst) {
                     leave_since = None;
                     continue;
                 }
@@ -376,7 +493,7 @@ impl EdgeDock {
                         }
                     }
                     DockPhase::Expanded => {
-                        if over_window || near {
+                        if over_window || near || dock.expand_hold_active() {
                             leave_since = None;
                         } else {
                             let since = leave_since
@@ -584,6 +701,15 @@ fn point_in_rect(
 
 fn clamp(v: i32, min: i32, max: i32) -> i32 {
     v.max(min).min(max.max(min))
+}
+
+/// Slight overshoot then settle — jelly pop without multi-bounce spring noise.
+fn ease_out_back(t: f64) -> f64 {
+    let t = t.clamp(0.0, 1.0);
+    let c1 = 1.70158 * 1.4;
+    let c3 = c1 + 1.0;
+    let u = t - 1.0;
+    1.0 + c3 * u * u * u + c1 * u * u
 }
 
 #[cfg(windows)]

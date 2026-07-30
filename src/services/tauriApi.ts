@@ -35,6 +35,9 @@ export async function apiGetSettings(): Promise<AppSettings> {
         doneProperty: "done?",
         titleProperty: "Name",
         dateProperty: "Date",
+        statusProperty: "Status",
+        statusDoneValue: "Done",
+        statusTodoValue: "Not started",
       },
     };
   }

@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default capabilities for Sticky Note",
-  "windows": ["main"],
+  "windows": ["main", "fx"],
   "permissions": [
     "core:default",
     "core:window:allow-show",
@@ -13,6 +13,8 @@
     "core:window:allow-set-size",
     "core:window:allow-set-position",
     "core:window:allow-set-always-on-top",
+    "core:window:allow-set-ignore-cursor-events",
+    "core:webview:allow-create-webview-window",
     "shell:allow-open"
   ]
 }
