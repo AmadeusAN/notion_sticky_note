@@ -1,16 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { listen } from "@tauri-apps/api/event";
-import {
-  FX_EVENTS,
-  type DockEdge,
-  type DockPhase,
-  type DockSnapshot,
-  type FxAmbientPayload,
-  type FxScatterPayload,
-  type FxSyncPayload,
-  type PanelInset,
-} from "../../types";
-import { WeatherCanvas } from "../../weather";
+import { useFxScene } from "../../runtime";
+import type { DockEdge, DockPhase, PanelInset } from "../../types";
+import { WeatherCanvas, type WeatherCanvasController } from "../../weather";
 import { IcicleSvg } from "./IcicleSvg";
 import {
   computeFringeTips,
@@ -34,25 +25,30 @@ export function IcicleTheme() {
   const [fringe, setFringe] = useState<FringeIcicle[]>([]);
   const [fringeMode, setFringeMode] = useState<FringeMode | null>(null);
   const [edge, setEdge] = useState<DockEdge | null>(null);
-  const [running, setRunning] = useState(true);
+  const [running, setRunning] = useState(false);
+  const canvas = useRef<WeatherCanvasController | null>(null);
 
   const panelRef = useRef<PanelInset>(DEFAULT_PANEL);
   const [panel, setPanel] = useState<PanelInset>(DEFAULT_PANEL);
   const prevPhase = useRef<DockPhase>("free");
   const fringeModeRef = useRef<FringeMode | null>(null);
-  const fringeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fringeEdgeRef = useRef<DockEdge | null>(null);
+  const presentedRef = useRef(false);
+  const staticOnlyRef = useRef(false);
+  const fringeTimer = useRef<number | undefined>(undefined);
   const fringeRef = useRef<FringeIcicle[]>([]);
   const edgeRef = useRef<DockEdge | null>(null);
   const modeRef = useRef<FringeMode | null>(null);
-  const sizeRef = useRef({ w: window.innerWidth, h: window.innerHeight });
-  const simRef = useRef(createIceAccentSim());
+  const [sim] = useState(createIceAccentSim);
 
   const showFringe = (e: DockEdge, mode: FringeMode, count: number) => {
+    if (!presentedRef.current) return;
     const next = makeFringe(e, mode, count);
     fringeRef.current = next;
     setFringe(next);
     setFringeMode(mode);
     fringeModeRef.current = mode;
+    fringeEdgeRef.current = e;
     modeRef.current = mode;
     setEdge(e);
     edgeRef.current = e;
@@ -63,135 +59,136 @@ export function IcicleTheme() {
     setFringe([]);
     setFringeMode(null);
     fringeModeRef.current = null;
+    fringeEdgeRef.current = null;
     modeRef.current = null;
+    sim.fringeTips = [];
   };
 
-  useEffect(() => {
-    const unsubs: Array<() => void> = [];
-    let alive = true;
-    const sim = simRef.current;
+  const cancelFringeTimer = () => {
+    window.clearTimeout(fringeTimer.current);
+    fringeTimer.current = undefined;
+  };
 
-    const add = async <T,>(
-      event: string,
-      handler: (e: { payload: T }) => void,
-    ) => {
-      const un = await listen<T>(event, handler);
-      if (!alive) {
-        un();
+  useFxScene({
+    onScatter: ({ kind, edge: ed, panel: p }) => {
+      if (!sim.active || staticOnlyRef.current) return;
+      const inset = p && p.w > 0 && p.h > 0 ? p : DEFAULT_PANEL;
+      panelRef.current = inset;
+      setPanel(inset);
+      setEdge(ed);
+      edgeRef.current = ed;
+      sim.panel = inset;
+      sim.edge = ed;
+      sim.scatterChips(ed, kind, window.innerWidth, window.innerHeight);
+      canvas.current?.wake();
+    },
+    onSync: ({ active, staticOnly, phase, edge: ed, panel: p }) => {
+      presentedRef.current = active || staticOnly;
+      staticOnlyRef.current = staticOnly;
+      sim.active = active && !staticOnly;
+      setRunning(sim.active);
+      if (!presentedRef.current) {
+        cancelFringeTimer();
+        prevPhase.current = "free";
+        clearFringe();
+        setEdge(null);
+        edgeRef.current = null;
+        sim.edge = null;
+        sim.clear();
+        canvas.current?.stopAndClear();
         return;
       }
-      unsubs.push(un);
-    };
-
-    void (async () => {
-      await add<FxScatterPayload>(FX_EVENTS.scatter, (e) => {
-        const { kind, edge: ed, panel: p } = e.payload;
-        if (!ed) return;
-        const inset = p && p.w > 0 && p.h > 0 ? p : DEFAULT_PANEL;
-        panelRef.current = inset;
-        setPanel(inset);
+      sim.edge = ed;
+      if (ed) {
         setEdge(ed);
         edgeRef.current = ed;
-        sim.panel = inset;
-        sim.edge = ed;
-        const { w, h } = sizeRef.current;
-        sim.scatterChips(ed, kind, w, h);
-      });
-
-      await add<FxSyncPayload>(FX_EVENTS.sync, (e) => {
-        const { active, edge: ed, panel: p } = e.payload;
-        sim.active = active;
-        setRunning(active);
-        if (!active) {
-          clearFringe();
-          setEdge(null);
-          edgeRef.current = null;
-          sim.clear();
-          return;
-        }
-        if (ed) {
-          setEdge(ed);
-          edgeRef.current = ed;
-          sim.edge = ed;
-        }
-        if (p && p.w > 0 && p.h > 0) {
-          panelRef.current = p;
-          setPanel(p);
-          sim.panel = p;
-        }
-      });
-
-      await add<FxAmbientPayload>(FX_EVENTS.ambient, (e) => {
-        const { edge: ed, phase } = e.payload;
-        if (!ed || !sim.active) return;
-        edgeRef.current = ed;
-        setEdge(ed);
-        const { w, h } = sizeRef.current;
-        if (modeRef.current && fringeRef.current.length > 0) {
-          sim.fringeTips = computeFringeTips(
-            ed,
-            panelRef.current,
-            fringeRef.current,
-            modeRef.current,
-            w,
-            h,
-          );
-          const n = phase === "collapsed" ? (Math.random() < 0.45 ? 2 : 1) : 1;
-          sim.spawnDrips(n);
-        }
-      });
-
-      await add<DockSnapshot>(FX_EVENTS.dock, (e) => {
-        const { phase, edge: ed } = e.payload;
-        const was = prevPhase.current;
+      }
+      if (p && p.w > 0 && p.h > 0) {
+        panelRef.current = p;
+        setPanel(p);
+        sim.panel = p;
+      }
+      if (staticOnly) {
+        cancelFringeTimer();
+        sim.clear();
+        sim.fringeTips = [];
+        canvas.current?.stopAndClear();
         prevPhase.current = phase;
-
-        if (fringeTimer.current) {
-          clearTimeout(fringeTimer.current);
-          fringeTimer.current = null;
-        }
-
         if (phase === "free" || !ed) {
           clearFringe();
           setEdge(null);
           edgeRef.current = null;
           return;
         }
-
-        setEdge(ed);
-        edgeRef.current = ed;
-
-        const toExpanded = was === "collapsed" && phase === "expanded";
-        const toCollapsed =
-          (was === "expanded" && phase === "collapsed") ||
-          (was === "free" && phase === "collapsed");
-
-        if (toExpanded) {
-          clearFringe();
-          fringeTimer.current = setTimeout(() => {
-            showFringe(ed, "screen", 13);
-          }, EXPAND_FRINGE_DELAY_MS);
-        } else if (toCollapsed) {
-          clearFringe();
-          fringeTimer.current = setTimeout(() => {
-            showFringe(ed, "strip", 12);
-          }, COLLAPSE_STRIP_DELAY_MS);
-        } else if (phase === "collapsed" && fringeModeRef.current == null) {
-          showFringe(ed, "strip", 12);
-        } else if (phase === "expanded" && fringeModeRef.current == null) {
-          showFringe(ed, "screen", 10);
+        const mode = phase === "collapsed" ? "strip" : "screen";
+        if (fringeModeRef.current !== mode || fringeEdgeRef.current !== ed) {
+          showFringe(ed, mode, phase === "collapsed" ? 12 : 10);
         }
-      });
-    })();
-
-    return () => {
-      alive = false;
-      if (fringeTimer.current) clearTimeout(fringeTimer.current);
-      for (const u of unsubs) u();
-      sim.clear();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+      }
+    },
+    onAmbient: ({ edge: ed, phase }) => {
+      if (!sim.active || staticOnlyRef.current) return;
+      edgeRef.current = ed;
+      setEdge(ed);
+      if (modeRef.current && fringeRef.current.length > 0) {
+        sim.fringeTips = computeFringeTips(
+          ed, panelRef.current, fringeRef.current, modeRef.current,
+          window.innerWidth, window.innerHeight,
+        );
+        sim.spawnDrips(phase === "collapsed" ? (Math.random() < 0.45 ? 2 : 1) : 1);
+        canvas.current?.wake();
+      }
+    },
+    onDock: ({ phase, edge: ed, presented }) => {
+      cancelFringeTimer();
+      if (!presentedRef.current || !presented) {
+        prevPhase.current = "free";
+        clearFringe();
+        setEdge(null);
+        edgeRef.current = null;
+        return;
+      }
+      if (staticOnlyRef.current) return;
+      const was = prevPhase.current;
+      prevPhase.current = phase;
+      if (phase === "free" || !ed) {
+        clearFringe();
+        setEdge(null);
+        edgeRef.current = null;
+        return;
+      }
+      setEdge(ed);
+      edgeRef.current = ed;
+      const toExpanded = was === "collapsed" && phase === "expanded";
+      const toCollapsed =
+        (was === "expanded" && phase === "collapsed") ||
+        (was === "free" && phase === "collapsed");
+      if (toExpanded || toCollapsed) {
+        clearFringe();
+        fringeTimer.current = window.setTimeout(() => {
+          fringeTimer.current = undefined;
+          showFringe(ed, toExpanded ? "screen" : "strip", toExpanded ? 13 : 12);
+        }, toExpanded ? EXPAND_FRINGE_DELAY_MS : COLLAPSE_STRIP_DELAY_MS);
+      } else if (fringeModeRef.current == null) {
+        showFringe(ed, phase === "collapsed" ? "strip" : "screen", phase === "collapsed" ? 12 : 10);
+      }
+    },
+  });
+  useEffect(() => () => {
+    sim.active = false;
+    presentedRef.current = false;
+    staticOnlyRef.current = false;
+    cancelFringeTimer();
+    prevPhase.current = "free";
+    fringeRef.current = [];
+    fringeModeRef.current = null;
+    fringeEdgeRef.current = null;
+    modeRef.current = null;
+    edgeRef.current = null;
+    sim.fringeTips = [];
+    sim.clear();
+    canvas.current?.stopAndClear();
+  }, [sim]);
 
   const bandStyle = {
     "--panel-x": `${panel.x}%`,
@@ -236,9 +233,9 @@ export function IcicleTheme() {
 
       <WeatherCanvas
         running={running}
+        controllerRef={canvas}
+        hasWork={() => sim.active && sim.pool.aliveCount() > 0}
         onFrame={(ctx, dt, w, h) => {
-          sizeRef.current = { w, h };
-          const sim = simRef.current;
           sim.panel = panelRef.current;
           sim.step(dt, w, h);
           sim.draw(ctx);

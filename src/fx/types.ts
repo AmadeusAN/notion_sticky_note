@@ -12,12 +12,8 @@ export interface PanelInset {
 }
 
 export const FX_EVENTS = {
-  scatter: "fx-scatter",
-  sync: "fx-sync",
-  ambient: "fx-ambient",
-  dock: "edge-dock-changed",
-  theme: "fx-theme-changed",
-  appearance: "fx-appearance-changed",
+  state: "fx-state",
+  action: "fx-action",
 } as const;
 
 export interface FxAppearancePayload {
@@ -47,6 +43,26 @@ export interface FxAmbientPayload {
 }
 
 export interface DockSnapshot {
+  revision: number;
   phase: DockPhase;
   edge: DockEdge | null;
+  presented: boolean;
 }
+
+export interface FxSnapshot extends FxSyncPayload {
+  revision: number;
+  eventId: number;
+  generation: number;
+  theme: string;
+  appearance: FxAppearancePayload;
+  dock: DockSnapshot;
+}
+
+export type FxAction = {
+  eventId: number;
+  generation: number;
+  stateRevision: number;
+} & (
+  | { kind: "scatter"; payload: FxScatterPayload }
+  | { kind: "ambient"; payload: FxAmbientPayload }
+);

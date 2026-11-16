@@ -1,4 +1,5 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, type MutableRefObject } from "react";
+import { createWeatherFrameLoop, type WeatherCanvasController } from "./frameLoop";
 import { clampDpr } from "./motion";
 
 export type WeatherFrameFn = (
@@ -10,83 +11,114 @@ export type WeatherFrameFn = (
 ) => void;
 
 interface Props {
-  /** When false, rAF stops and canvas is cleared. */
+  /** Authoritative scene activity; false immediately clears and sleeps. */
   running?: boolean;
   className?: string;
   onFrame: WeatherFrameFn;
+  /** Omit for continuous weather; transient scenes supply their live count. */
+  hasWork?: () => boolean;
+  controllerRef?: MutableRefObject<WeatherCanvasController | null>;
 }
 
 /**
  * Full-viewport transparent canvas with capped DPR and pause-on-inactive.
  */
 export function WeatherCanvas({
-  running = true,
+  running = false,
   className,
   onFrame,
+  hasWork,
+  controllerRef,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const onFrameRef = useRef(onFrame);
-  onFrameRef.current = onFrame;
+  const callbacks = useRef({ running, onFrame, hasWork });
+  callbacks.current = { running, onFrame, hasWork };
+  const loopRef = useRef<WeatherCanvasController | null>(null);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-
     const ctx = canvas.getContext("2d", { alpha: true });
     if (!ctx) return;
-
-    let raf = 0;
-    let alive = true;
-    let last = performance.now();
-    let timeSec = 0;
     let cssW = 0;
     let cssH = 0;
-
+    let dpr = 0;
+    let resizePending = true;
+    let disposed = false;
+    const clear = () => {
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.restore();
+    };
     const resize = () => {
-      const dpr = clampDpr(window.devicePixelRatio || 1);
-      cssW = window.innerWidth;
-      cssH = window.innerHeight;
-      canvas.width = Math.max(1, Math.floor(cssW * dpr));
-      canvas.height = Math.max(1, Math.floor(cssH * dpr));
+      resizePending = false;
+      const nextDpr = clampDpr(window.devicePixelRatio || 1);
+      const nextW = window.innerWidth;
+      const nextH = window.innerHeight;
+      if (cssW === nextW && cssH === nextH && dpr === nextDpr) return;
+      cssW = nextW;
+      cssH = nextH;
+      dpr = nextDpr;
+      const width = Math.max(1, Math.floor(cssW * dpr));
+      const height = Math.max(1, Math.floor(cssH * dpr));
+      if (canvas.width !== width) canvas.width = width;
+      if (canvas.height !== height) canvas.height = height;
       canvas.style.width = `${cssW}px`;
       canvas.style.height = `${cssH}px`;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     };
-
-    resize();
-    const ro = new ResizeObserver(resize);
+    const loop = createWeatherFrameLoop({
+      enabled: () => !disposed && callbacks.current.running,
+      hasWork: () => resizePending || (callbacks.current.hasWork?.() ?? true),
+      onFrame: (dt, timeSec) => {
+        if (resizePending) resize();
+        ctx.clearRect(0, 0, cssW, cssH);
+        if (callbacks.current.hasWork?.() ?? true) {
+          callbacks.current.onFrame(ctx, dt, cssW, cssH, timeSec);
+        }
+      },
+      clear,
+      request: (callback) => requestAnimationFrame(callback),
+      cancel: (id) => cancelAnimationFrame(id),
+      now: () => performance.now(),
+    });
+    loopRef.current = loop;
+    if (controllerRef) controllerRef.current = loop;
+    const notifyResize = () => {
+      resizePending = true;
+      loop.wake();
+    };
+    const ro = new ResizeObserver(notifyResize);
     ro.observe(document.documentElement);
-
-    const tick = (now: number) => {
-      if (!alive) return;
-      raf = requestAnimationFrame(tick);
-      if (!running) {
-        last = now;
-        return;
-      }
-      const dt = Math.min(0.05, (now - last) / 1000);
-      last = now;
-      timeSec += dt;
-      ctx.clearRect(0, 0, cssW, cssH);
-      onFrameRef.current(ctx, dt, cssW, cssH, timeSec);
+    window.addEventListener("resize", notifyResize);
+    let resolution: MediaQueryList | undefined;
+    const watchDpr = () => {
+      resolution?.removeEventListener("change", onDprChange);
+      resolution = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+      resolution.addEventListener("change", onDprChange);
     };
-
-    if (running) {
-      last = performance.now();
-      raf = requestAnimationFrame(tick);
-    }
-
+    const onDprChange = () => {
+      watchDpr();
+      notifyResize();
+    };
+    watchDpr();
+    resize();
+    loop.wake();
     return () => {
-      alive = false;
-      cancelAnimationFrame(raf);
+      disposed = true;
+      loop.stopAndClear();
       ro.disconnect();
-      try {
-        ctx.setTransform(1, 0, 0, 1, 0, 0);
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-      } catch {
-        /* ignore */
-      }
+      window.removeEventListener("resize", notifyResize);
+      resolution?.removeEventListener("change", onDprChange);
+      loopRef.current = null;
+      if (controllerRef?.current === loop) controllerRef.current = null;
     };
+  }, [controllerRef]);
+
+  useEffect(() => {
+    if (running) loopRef.current?.wake();
+    else loopRef.current?.stopAndClear();
   }, [running]);
 
   return (

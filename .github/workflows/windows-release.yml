@@ -1,0 +1,58 @@
+name: Windows release build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Set up Rust MSVC
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add x86_64-pc-windows-msvc
+      - name: Install locked frontend dependencies
+        run: npm ci
+      - name: Build unsigned NSIS installer with locked Cargo dependencies
+        run: npm run tauri:build -- --target x86_64-pc-windows-msvc --bundles nsis -- --locked
+      - name: Collect installer and licenses
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Path release-artifacts | Out-Null
+          $installers = @(Get-ChildItem 'src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe')
+          if ($installers.Count -eq 0) { throw 'No NSIS installer was produced.' }
+          $installers | Copy-Item -Destination release-artifacts
+          Copy-Item LICENSE,THIRD-PARTY-NOTICES.txt -Destination release-artifacts
+          $hashes = Get-ChildItem release-artifacts -File | Sort-Object Name | ForEach-Object {
+            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant()
+            '{0}  {1}' -f $hash, $_.Name
+          }
+          $hashes | Set-Content -Encoding utf8NoBOM release-artifacts/SHA256SUMS.txt
+      - name: Upload reviewable build artifacts (no automatic publication)
+        uses: actions/upload-artifact@v4
+        with:
+          name: sticky-note-windows-x64-${{ github.run_number }}
+          path: release-artifacts/*
+          if-no-files-found: error
+          retention-days: 30

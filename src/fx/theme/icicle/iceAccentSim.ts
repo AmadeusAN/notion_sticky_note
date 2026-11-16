@@ -74,7 +74,7 @@ export function createIceAccentSim(): IceAccentSim {
 
   const sim: IceAccentSim = {
     pool,
-    active: true,
+    active: false,
     panel: { x: 20, y: 20, w: 60, h: 60 },
     edge: null,
     fringeTips: [],
@@ -135,7 +135,7 @@ export function createIceAccentSim(): IceAccentSim {
       pool.forEachAlive((p) => {
         p.life -= dt;
         if (p.life <= 0) {
-          p.alive = false;
+          pool.release(p);
           return;
         }
         p.x += p.vx * dt;
@@ -147,17 +147,18 @@ export function createIceAccentSim(): IceAccentSim {
           p.vy += 220 * dt;
           p.vx *= 0.98;
         }
-        if (offscreen(p.x, p.y, w, h, 40)) p.alive = false;
+        if (offscreen(p.x, p.y, w, h, 40)) pool.release(p);
       });
     },
 
     draw(ctx) {
       const chip = sprites.iceChip;
       const drip = sprites.drip;
+      const app = getFxAppearance();
+      const { mul, profile } = particleGain(app, 0.9);
       pool.forEachAlive((p) => {
         const t = p.life / Math.max(0.001, p.maxLife);
         const fade = t < 0.15 ? t / 0.15 : t > 0.8 ? (1 - t) / 0.2 : 1;
-        const { mul, profile } = particleGain(getFxAppearance(), 0.9);
         ctx.save();
         ctx.globalAlpha = Math.min(1, p.alpha * fade * mul);
         ctx.filter =
@@ -167,7 +168,7 @@ export function createIceAccentSim(): IceAccentSim {
         ctx.translate(p.x, p.y);
         if (p.kind === "chip") {
           ctx.rotate(p.rot);
-          const s = p.size * (getFxAppearance().edgeBoost ? 1.15 : 1);
+          const s = p.size * (app.edgeBoost ? 1.15 : 1);
           ctx.drawImage(chip, -s / 2, -s / 2, s, s);
         } else {
           const s = p.size;

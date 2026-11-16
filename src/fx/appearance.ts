@@ -98,29 +98,51 @@ export function buildAppearance(
   };
 }
 
+export interface FxParticleGain {
+  mul: number;
+  profile: FxContrastProfile;
+  near: boolean;
+}
+
+const derivedAppearances = new WeakMap<
+  FxAppearance,
+  { near: FxParticleGain; far: FxParticleGain }
+>();
+
+function derivedAppearance(appearance: FxAppearance) {
+  let derived = derivedAppearances.get(appearance);
+  if (!derived) {
+    const profile = contrastProfile(appearance.luminance);
+    const alpha = appearance.intensity * profile.alphaMul;
+    derived = {
+      near: {
+        mul: alpha * profile.nearMul * (appearance.edgeBoost ? profile.edgeMul : 1),
+        profile,
+        near: true,
+      },
+      far: { mul: alpha * profile.farMul, profile, near: false },
+    };
+    derivedAppearances.set(appearance, derived);
+  }
+  return derived;
+}
+
 /** Effective multipliers for a particle at depth 0..1 (1 = near). */
 export function particleGain(appearance: FxAppearance, depth: number) {
-  const profile = contrastProfile(appearance.luminance);
-  const near = depth > 0.55;
-  let mul =
-    appearance.intensity *
-    profile.alphaMul *
-    (near ? profile.nearMul : profile.farMul);
-  if (appearance.edgeBoost && near) mul *= profile.edgeMul;
-  return { mul, profile, near };
+  const derived = derivedAppearance(appearance);
+  return depth > 0.55 ? derived.near : derived.far;
 }
 
 export function densityTarget(
   appearance: FxAppearance,
   base: number,
 ): number {
-  const profile = contrastProfile(appearance.luminance);
-  return Math.round(base * appearance.intensity * profile.densityMul);
+  return Math.round(base * appearance.intensity * derivedAppearance(appearance).near.profile.densityMul);
 }
 
 /** CSS custom properties for DOM fringe themes. */
 export function appearanceCssVars(appearance: FxAppearance): Record<string, string> {
-  const profile = contrastProfile(appearance.luminance);
+  const profile = derivedAppearance(appearance).near.profile;
   const edge = appearance.edgeBoost ? profile.edgeMul : 1;
   return {
     "--fx-intensity": String(appearance.intensity),

@@ -2,7 +2,7 @@
 
 import type { DockEdge, PanelInset } from "../../types";
 import { rand } from "../../math";
-import { densityTarget, particleGain } from "../../appearance";
+import { densityTarget, particleGain, type FxParticleGain } from "../../appearance";
 import { getFxAppearance } from "../../appearanceStore";
 import {
   alongEdgePx,
@@ -85,7 +85,7 @@ export function createSnowSim(): SnowSim {
   const sim: SnowSim = {
     pool,
     wind: 22,
-    active: true,
+    active: false,
     panel: { x: 20, y: 20, w: 60, h: 60 },
     edge: null,
 
@@ -181,7 +181,7 @@ export function createSnowSim(): SnowSim {
       pool.forEachAlive((p) => {
         p.life -= dt;
         if (p.life <= 0) {
-          p.alive = false;
+          pool.release(p);
           return;
         }
 
@@ -202,14 +202,17 @@ export function createSnowSim(): SnowSim {
     draw(ctx) {
       const soft = sprites.snowSoft;
       const nearSpr = sprites.snowNear;
+      const app = getFxAppearance();
+      const nearGain = particleGain(app, 1);
+      const farGain = particleGain(app, 0);
 
       pool.forEachAlive((p) => {
         if (p.near) return;
-        drawFlake(ctx, soft, p);
+        drawFlake(ctx, soft, p, p.depth > 0.55 ? nearGain : farGain, app.edgeBoost);
       });
       pool.forEachAlive((p) => {
         if (!p.near) return;
-        drawFlake(ctx, nearSpr, p);
+        drawFlake(ctx, nearSpr, p, p.depth > 0.55 ? nearGain : farGain, app.edgeBoost);
       });
     },
   };
@@ -221,13 +224,15 @@ function drawFlake(
   ctx: CanvasRenderingContext2D,
   sprite: HTMLCanvasElement,
   p: SnowSlot,
+  gain: FxParticleGain,
+  edgeBoost: boolean,
 ) {
   const t = Math.min(1, p.life / Math.max(0.001, p.maxLife));
   const fade = t < 0.12 ? t / 0.12 : t > 0.82 ? (1 - t) / 0.18 : 1;
-  const { mul, profile } = particleGain(getFxAppearance(), p.depth);
+  const { mul, profile } = gain;
   const s =
     p.size *
-    (getFxAppearance().edgeBoost && p.near ? 1.2 : 1);
+    (edgeBoost && p.near ? 1.2 : 1);
 
   ctx.save();
   ctx.globalAlpha = Math.min(1, p.alpha * fade * mul);

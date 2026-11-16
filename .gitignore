@@ -42,3 +42,9 @@ Desktop.ini
 
 # program
 *.exe
+
+# Local verification fixtures, measurements and caches are never public assets.
+debug/optimization-*
+debug/tauri.optimization*.json
+*.tsbuildinfo
+releases/

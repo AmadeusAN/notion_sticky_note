@@ -2,7 +2,7 @@
 
 import type { DockEdge, PanelInset } from "../../types";
 import { rand } from "../../math";
-import { densityTarget, particleGain } from "../../appearance";
+import { densityTarget, particleGain, type FxParticleGain } from "../../appearance";
 import { getFxAppearance } from "../../appearanceStore";
 import {
   alongEdgePx,
@@ -85,7 +85,7 @@ export function createRainSim(): RainSim {
   const sim: RainSim = {
     pool,
     wind: 38,
-    active: true,
+    active: false,
     panel: { x: 20, y: 20, w: 60, h: 60 },
     edge: null,
 
@@ -197,7 +197,7 @@ export function createRainSim(): RainSim {
       pool.forEachAlive((p) => {
         p.life -= dt;
         if (p.life <= 0) {
-          p.alive = false;
+          pool.release(p);
           return;
         }
 
@@ -226,21 +226,24 @@ export function createRainSim(): RainSim {
     draw(ctx, _w, _h, _timeSec) {
       const streak = sprites.rainStreak;
       const splash = sprites.splash;
+      const app = getFxAppearance();
+      const nearGain = particleGain(app, 1);
+      const farGain = particleGain(app, 0);
 
       // Far streaks first
       pool.forEachAlive((p) => {
         if (p.kind !== "streak" || p.depth >= 0.55) return;
-        drawStreak(ctx, streak, p);
+        drawStreak(ctx, streak, p, p.depth > 0.55 ? nearGain : farGain, app.edgeBoost);
       });
       pool.forEachAlive((p) => {
         if (p.kind !== "streak" || p.depth < 0.55) return;
-        drawStreak(ctx, streak, p);
+        drawStreak(ctx, streak, p, p.depth > 0.55 ? nearGain : farGain, app.edgeBoost);
       });
       pool.forEachAlive((p) => {
         if (p.kind !== "splash") return;
         const t = p.life / p.maxLife;
         const s = p.len * (1.1 - t * 0.4);
-        const { mul, profile } = particleGain(getFxAppearance(), 1);
+        const { mul, profile } = nearGain;
         ctx.save();
         ctx.globalAlpha = Math.min(1, p.alpha * t * mul);
         ctx.filter =
@@ -261,16 +264,18 @@ function drawStreak(
   ctx: CanvasRenderingContext2D,
   sprite: HTMLCanvasElement,
   p: RainSlot,
+  gain: FxParticleGain,
+  edgeBoost: boolean,
 ) {
   const t = Math.min(1, p.life / Math.max(0.001, p.maxLife));
   const fade = t < 0.15 ? t / 0.15 : t > 0.85 ? (1 - t) / 0.15 : 1;
   const speed = Math.hypot(p.vx, p.vy);
   const len = p.len * (0.7 + Math.min(1.4, speed / 500));
   const angle = Math.atan2(p.vy, p.vx + 0.001) - Math.PI / 2;
-  const { mul, profile } = particleGain(getFxAppearance(), p.depth);
+  const { mul, profile } = gain;
   const width =
     p.width *
-    (getFxAppearance().edgeBoost && p.depth > 0.55 ? 1.25 : 1);
+    (edgeBoost && p.depth > 0.55 ? 1.25 : 1);
 
   ctx.save();
   ctx.globalAlpha = Math.min(1, p.alpha * fade * mul);

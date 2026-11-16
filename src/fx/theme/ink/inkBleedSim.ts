@@ -57,7 +57,7 @@ export function createInkBleedSim(): InkBleedSim {
 
   const sim: InkBleedSim = {
     pool,
-    active: true,
+    active: false,
     panel: { x: 20, y: 20, w: 60, h: 60 },
 
     clear() {
@@ -105,7 +105,7 @@ export function createInkBleedSim(): InkBleedSim {
       pool.forEachAlive((p) => {
         p.life -= dt;
         if (p.life <= 0) {
-          p.alive = false;
+          pool.release(p);
           return;
         }
         p.x += p.vx * dt;
@@ -113,7 +113,7 @@ export function createInkBleedSim(): InkBleedSim {
         p.vx *= 0.96;
         p.vy *= 0.96;
         p.size += 6 * dt;
-        if (offscreen(p.x, p.y, w, h, 30)) p.alive = false;
+        if (offscreen(p.x, p.y, w, h, 30)) pool.release(p);
       });
     },
 

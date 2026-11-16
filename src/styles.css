@@ -7,15 +7,27 @@
   --note-fg: #2a2418;
   --note-muted: #6b5e45;
   --note-accent: #c45c26;
-  --note-shadow: 0 18px 40px rgba(40, 28, 8, 0.28);
+  --note-shadow: 0 2px 6px -2px rgba(15, 20, 30, 0.24);
   --note-border: rgba(120, 90, 40, 0.18);
-  --note-blur: 0px;
-  --note-opacity: 1;
   --note-radius: 2px 2px 10px 10px;
   --note-pop: #c45c26;
   --note-pop-soft: rgba(196, 92, 38, 0.12);
   --note-tray: #fff4a3;
   --note-card: #fff4a3;
+  --glass-surface: color-mix(in srgb, var(--note-bg) 76%, transparent);
+  --glass-edge: color-mix(in srgb, var(--note-fg) 12%, transparent);
+  --glass-highlight: rgba(255, 255, 255, 0.72);
+  --glass-glow: rgba(255, 255, 255, 0.32);
+  --control-hover: color-mix(in srgb, var(--note-fg) 7%, transparent);
+  --group-surface: color-mix(in srgb, var(--note-bg) 97%, var(--note-fg));
+}
+
+:root[data-mode="dark"] {
+  color-scheme: dark;
+  --note-shadow: 0 2px 6px -2px rgba(0, 0, 0, 0.48);
+  --glass-highlight: rgba(255, 255, 255, 0.2);
+  --glass-glow: rgba(255, 255, 255, 0.08);
+  --group-surface: color-mix(in srgb, var(--note-bg) 94%, var(--note-fg));
 }
 
 * {
@@ -46,6 +58,21 @@ textarea {
   display: flex;
 }
 
+.app-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.app-view {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
 /* Flush the docked edge so fringe sits on the real screen edge */
 html[data-dock-edge="top"][data-dock-phase="expanded"] .app-shell,
 html[data-dock-edge="top"][data-dock-phase="collapsed"] .app-shell {
@@ -73,6 +100,8 @@ html[data-dock-phase="collapsed"][data-surface="motion"] .app-shell {
 
 .sticky-note {
   position: relative;
+  min-width: 0;
+  min-height: 0;
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -86,11 +115,7 @@ html[data-dock-phase="collapsed"][data-surface="motion"] .app-shell {
   box-shadow: var(--note-shadow);
   border: 1px solid var(--note-border);
   overflow: hidden;
-  opacity: var(--note-opacity);
-  backdrop-filter: blur(var(--note-blur));
-  -webkit-backdrop-filter: blur(var(--note-blur));
-  transform-origin: center center;
-  will-change: transform;
+  isolation: isolate;
   transition: box-shadow 180ms ease, background 180ms ease, color 180ms ease;
 }
 
@@ -107,25 +132,12 @@ html[data-dock-phase="collapsed"][data-surface="motion"] .app-shell {
     var(--note-bg);
 }
 
-.theme-paper .sticky-note::after {
-  content: "";
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  width: 28px;
-  height: 28px;
-  background: linear-gradient(135deg, transparent 48%, rgba(0, 0, 0, 0.08) 50%, rgba(0, 0, 0, 0.14));
-  pointer-events: none;
-}
 
 .theme-glass .sticky-note {
-  border-radius: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.35);
-  background: linear-gradient(
-    160deg,
-    rgba(255, 255, 255, 0.42),
-    rgba(220, 230, 245, 0.28)
-  );
+  border-radius: 18px;
+  background:
+    radial-gradient(ellipse at 95% 0%, rgba(128, 170, 230, 0.15), transparent 50%),
+    var(--note-bg);
 }
 
 .theme-dark .sticky-note {
@@ -181,18 +193,6 @@ html[data-dock-phase="collapsed"][data-surface="motion"] .app-shell {
   overflow: hidden;
 }
 
-/* Soft header card — reference-style clean list chrome */
-[data-surface="layered"] .note-header,
-[data-surface="motion"] .note-header {
-  margin: 10px 10px 0;
-  padding: 12px 12px;
-  border-radius: 12px;
-  background: var(--note-card);
-  border: 1px solid var(--note-border);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.7) inset;
-  position: relative;
-  z-index: 1;
-}
 
 [data-surface="layered"] .note-title,
 [data-surface="motion"] .note-title {
@@ -330,16 +330,11 @@ html[data-dock-phase="collapsed"][data-surface="motion"] .app-shell {
   color: #a8b0c0;
 }
 
-/* —— Motion themes: drifting ambient + orbiting border —— */
-@property --note-spin {
-  syntax: "<angle>";
-  inherits: false;
-  initial-value: 0deg;
-}
+/* Optional ambient palettes keep their color drift, never deform the content. */
 
 [data-surface="motion"] .sticky-note {
   border-radius: 16px;
-  border: 1px solid transparent;
+  border: 1px solid var(--note-border);
   overflow: hidden;
   isolation: isolate;
   background-color: var(--note-tray);
@@ -366,32 +361,6 @@ html[data-dock-phase="collapsed"][data-surface="motion"] .app-shell {
   box-shadow: var(--note-shadow);
 }
 
-[data-surface="motion"] .sticky-note::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  padding: 2px;
-  border-radius: inherit;
-  background: conic-gradient(
-    from var(--note-spin),
-    var(--note-pop),
-    var(--note-accent),
-    transparent 38%,
-    transparent 62%,
-    var(--note-pop)
-  );
-  -webkit-mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  mask-composite: exclude;
-  pointer-events: none;
-  z-index: 3;
-  animation: note-border-spin 6s linear infinite;
-}
 
 [data-surface="motion"] .note-header,
 [data-surface="motion"] .task-list,
@@ -412,32 +381,6 @@ html[data-dock-phase="collapsed"][data-surface="motion"] .app-shell {
   }
 }
 
-@keyframes note-border-spin {
-  to {
-    --note-spin: 360deg;
-  }
-}
-
-/* Fallback if @property unsupported: rotate pseudo via transform on a ring */
-@supports not (background: conic-gradient(from var(--note-spin), red, blue)) {
-  [data-surface="motion"] .sticky-note::before {
-    animation: note-border-rotate 6s linear infinite;
-    background: conic-gradient(
-      from 0deg,
-      var(--note-pop),
-      var(--note-accent),
-      transparent 40%,
-      transparent 60%,
-      var(--note-pop)
-    );
-  }
-
-  @keyframes note-border-rotate {
-    to {
-      transform: rotate(360deg);
-    }
-  }
-}
 
 .theme-swatch {
   position: relative;
@@ -456,9 +399,37 @@ html[data-dock-phase="collapsed"][data-surface="motion"] .app-shell {
 .note-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 12px 12px 8px;
+  gap: 12px;
+  padding: 16px 16px 12px;
+  min-height: 64px;
+  flex-shrink: 0;
   cursor: grab;
+}
+
+.note-toolbar {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 999px;
+  border: 1px solid var(--glass-edge);
+  background: linear-gradient(145deg, var(--glass-glow), transparent 65%), var(--glass-surface);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  box-shadow: inset 0 1px 0 var(--glass-highlight), 0 2px 5px rgba(0, 0, 0, 0.06);
+}
+
+.note-toolbar svg,
+.group-del svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
 }
 
 .note-header:active {
@@ -467,6 +438,8 @@ html[data-dock-phase="collapsed"][data-surface="motion"] .app-shell {
 
 .note-title {
   flex: 1;
+  min-width: 0;
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
   margin: 0;
   font-size: 18px;
   font-weight: 700;
@@ -484,15 +457,32 @@ html[data-dock-phase="collapsed"][data-surface="motion"] .app-shell {
   color: var(--note-muted);
   width: 28px;
   height: 28px;
-  border-radius: 8px;
+  border-radius: 50%;
   display: grid;
   place-items: center;
   cursor: pointer;
   transition: background 120ms ease, color 120ms ease, transform 120ms ease;
 }
 
+.note-toolbar .icon-btn {
+  width: 30px;
+  height: 30px;
+  color: var(--note-fg);
+}
+
+
+.icon-btn:disabled {
+  opacity: 0.45;
+  cursor: progress;
+}
+
+:where(button, input, textarea):focus-visible {
+  outline: 2px solid var(--note-accent);
+  outline-offset: 3px;
+}
+
 .icon-btn:hover {
-  background: rgba(0, 0, 0, 0.06);
+  background: var(--control-hover);
   color: var(--note-fg);
 }
 
@@ -506,8 +496,10 @@ html[data-dock-phase="collapsed"][data-surface="motion"] .app-shell {
 
 .task-list {
   flex: 1;
+  min-height: 0;
+  scrollbar-gutter: stable;
   overflow: auto;
-  padding: 4px 10px 14px;
+  padding: 4px 12px 14px;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -518,7 +510,7 @@ html[data-dock-phase="collapsed"][data-surface="motion"] .app-shell {
 }
 
 .task-list::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.15);
+  background: color-mix(in srgb, var(--note-fg) 18%, transparent);
   border-radius: 999px;
 }
 
@@ -528,11 +520,11 @@ html[data-dock-phase="collapsed"][data-surface="motion"] .app-shell {
   gap: 10px;
   padding: 8px 8px;
   border-radius: 8px;
-  transition: background 140ms ease, opacity 140ms ease, transform 140ms ease;
+  transition: background 140ms ease, opacity 140ms ease;
 }
 
 .task-item:hover {
-  background: rgba(0, 0, 0, 0.04);
+  background: var(--control-hover);
 }
 
 .theme-dark .task-item:hover {
@@ -576,6 +568,27 @@ html[data-dock-phase="collapsed"][data-surface="motion"] .app-shell {
   transform: scale(0.9);
 }
 
+.task-check:disabled,
+.task-del:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.task-item[data-busy="true"] .task-check,
+.task-item[data-busy="true"] .task-del {
+  cursor: progress;
+}
+
+.task-item[data-busy="true"] .task-check::after {
+  display: none;
+}
+
+.task-pending-mark {
+  color: var(--note-fg);
+  font-size: 14px;
+  line-height: 1;
+}
+
 .task-body {
   min-width: 0;
   flex: 1;
@@ -586,6 +599,7 @@ html[data-dock-phase="collapsed"][data-surface="motion"] .app-shell {
   font-size: 14px;
   line-height: 1.35;
   word-break: break-word;
+  white-space: pre-wrap;
 }
 
 .task-item.done .task-text {
@@ -612,16 +626,425 @@ html[data-dock-phase="collapsed"][data-surface="motion"] .app-shell {
   background: rgba(255, 255, 255, 0.08);
 }
 
+/* Grouped list ------------------------------------------------------ */
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.group + .group {
+  margin-top: 14px;
+}
+
+.group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 4px 8px 7px;
+  font-family: "Segoe UI", system-ui, sans-serif;
+}
+
+.group-badge {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  display: grid;
+  place-items: center;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.group-badge-notion {
+  background: rgba(35, 131, 226, 0.14);
+  color: #2b6cb0;
+}
+
+.theme-dark .group-badge-notion {
+  background: rgba(70, 140, 230, 0.2);
+  color: #7fb0ea;
+}
+
+.group-badge-local {
+  background: var(--note-pop-soft, rgba(196, 92, 38, 0.12));
+  color: var(--note-accent);
+}
+
+.group-badge-archive {
+  background: color-mix(in srgb, var(--note-muted) 14%, transparent);
+  color: var(--note-muted);
+}
+
+.group-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--note-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.group-count {
+  font-size: 10px;
+  color: var(--note-muted);
+  opacity: 0.7;
+}
+
+.group-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 2px;
+  opacity: 0.65;
+  transition: opacity 120ms ease;
+}
+
+.group:hover .group-actions {
+  opacity: 1;
+}
+
+.group:focus-within .group-actions {
+  opacity: 1;
+}
+
+.group-add,
+.group-del {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--note-muted);
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.group-add:hover,
+.group-del:hover {
+  background: var(--control-hover);
+  color: var(--note-fg);
+}
+
+.theme-dark .group-add:hover,
+.theme-dark .group-del:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+
+.group-tasks {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 14px;
+  background: var(--group-surface);
+  border: 1px solid color-mix(in srgb, var(--note-fg) 6%, transparent);
+}
+
+.group-empty {
+  padding: 6px 10px 8px;
+  font-size: 12px;
+  color: var(--note-muted);
+  font-family: "Segoe UI", system-ui, sans-serif;
+}
+
+.add-group {
+  margin: 8px 4px 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--glass-edge);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--note-muted);
+  font-size: 12px;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease;
+}
+
+.add-group:hover {
+  background: var(--control-hover);
+  color: var(--note-fg);
+}
+
+.theme-dark .add-group:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* Task delete ------------------------------------------------------- */
+.task-del {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--note-muted);
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  flex-shrink: 0;
+  opacity: 0.45;
+  transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+}
+
+.task-item:hover .task-del {
+  opacity: 0.85;
+}
+
+.task-item:focus-within .task-del {
+  opacity: 1;
+}
+
+.task-del:hover {
+  background: rgba(196, 92, 38, 0.14);
+  color: #c45c26;
+}
+
+/* Composer bottom sheet ---------------------------------------------- */
+.composer-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  background: color-mix(in srgb, var(--note-fg) 12%, transparent);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  border-radius: inherit;
+  animation: composer-fade 140ms ease;
+}
+
+.composer {
+  width: calc(100% - 20px);
+  max-height: calc(100% - 20px);
+  overflow: auto;
+  margin: 10px;
+  padding: 18px;
+  border-radius: 22px;
+  border: 1px solid var(--glass-edge);
+  background: linear-gradient(150deg, var(--glass-glow), transparent 55%), var(--glass-surface);
+  backdrop-filter: blur(24px) saturate(150%);
+  -webkit-backdrop-filter: blur(24px) saturate(150%);
+  color: var(--note-fg);
+  box-shadow: inset 0 1px 0 var(--glass-highlight), 0 6px 18px rgba(0, 0, 0, 0.16);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  animation: composer-up 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.composer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.composer-input {
+  width: 100%;
+  border: 1px solid var(--glass-edge);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--note-bg) 92%, transparent);
+  color: var(--note-fg);
+  padding: 9px 10px;
+  font-size: 14px;
+  user-select: text;
+  transition: border-color 120ms ease;
+}
+
+.theme-dark .composer-input {
+  background: color-mix(in srgb, var(--note-bg) 92%, transparent);
+}
+
+.composer-input:focus {
+  border-color: color-mix(in srgb, var(--note-accent) 65%, var(--note-border));
+}
+
+.composer-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.composer-batch {
+  gap: 10px;
+  overflow: hidden;
+}
+
+.composer-batch > * {
+  flex-shrink: 0;
+}
+
+.composer-batch .composer-body {
+  flex-shrink: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  gap: 10px;
+  padding: 2px;
+  margin: -2px;
+}
+
+.composer-batch .composer-body > * {
+  flex-shrink: 0;
+}
+
+.import-text {
+  display: block;
+  min-height: 76px;
+  resize: vertical;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.import-hint {
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.import-count {
+  margin: 0 0 6px;
+  color: var(--note-muted);
+  font-size: 12px;
+}
+
+.import-preview {
+  max-height: 112px;
+  overflow: auto;
+  border: 1px solid var(--glass-edge);
+  border-radius: 12px;
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--note-bg) 92%, transparent);
+  user-select: text;
+}
+
+.import-preview ol {
+  margin: 0;
+  padding-left: 24px;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.import-preview li {
+  padding-left: 2px;
+  overflow-wrap: anywhere;
+}
+
+.composer-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  appearance: none;
+  border: 1px solid var(--note-border);
+  background: transparent;
+  color: var(--note-muted);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.chip.active {
+  background: var(--note-accent);
+  border-color: var(--note-accent);
+  color: #fff;
+}
+
+.chip-new {
+  border-style: dashed;
+}
+
+.composer-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.btn-ghost,
+.btn-primary {
+  appearance: none;
+  border-radius: 999px;
+  padding: 7px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: opacity 120ms ease, transform 100ms ease;
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--note-muted);
+}
+
+.btn-ghost:hover {
+  color: var(--note-fg);
+}
+
+.btn-primary {
+  background: var(--note-accent);
+  color: #fff;
+}
+
+.btn-primary:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.btn-primary:not(:disabled):active {
+  transform: scale(0.96);
+}
+
+@keyframes composer-up {
+  from {
+    transform: translateY(14px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+@keyframes composer-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
 .note-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 8px 12px 10px;
+  padding: 10px 16px 12px;
   font-family: "Segoe UI", system-ui, sans-serif;
   font-size: 11px;
   color: var(--note-muted);
-  border-top: 1px solid rgba(0, 0, 0, 0.06);
+  flex-shrink: 0;
+  border-top: 1px solid var(--glass-edge);
+  overflow-wrap: anywhere;
 }
 
 .theme-dark .note-footer {
@@ -666,14 +1089,21 @@ html[data-dock-phase="collapsed"][data-surface="motion"] .app-shell {
   line-height: 1.5;
 }
 
+.app-shell:has(.settings-panel) {
+  color-scheme: light;
+}
+
 .settings-panel {
   flex: 1;
+  min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   border-radius: 12px;
   background: rgba(250, 248, 242, 0.96);
+  color-scheme: light;
   color: #2a2418;
-  box-shadow: 0 18px 40px rgba(40, 28, 8, 0.28);
+  box-shadow: var(--note-shadow);
   overflow: hidden;
   font-family: "Segoe UI", system-ui, sans-serif;
 }
@@ -692,6 +1122,9 @@ html[data-dock-phase="collapsed"][data-surface="motion"] .app-shell {
 
 .settings-body {
   flex: 1;
+  min-width: 0;
+  min-height: 0;
+  scrollbar-gutter: stable;
   overflow: auto;
   padding: 8px 14px 16px;
   display: flex;
@@ -858,7 +1291,7 @@ html[data-dock-phase="collapsed"][data-surface="motion"] .app-shell {
 .ghost-btn {
   border: 1px solid rgba(120, 90, 40, 0.22);
   background: transparent;
-  color: #2a2418;
+  color: inherit;
 }
 
 .hint {
@@ -921,10 +1354,6 @@ html[data-dock-phase="collapsed"][data-surface="motion"] .app-shell {
   pointer-events: none;
 }
 
-/* Hide paper dog-ear while collapsed so it doesn't fight the handle */
-.theme-paper .sticky-note.dock-collapsed::after {
-  display: none;
-}
 
 /* Short capsule centered on the desktop-facing (peek) edge */
 .sticky-note.dock-collapsed.dock-edge-left .dock-tab,
@@ -1018,3 +1447,179 @@ html[data-dock-phase="collapsed"][data-surface="motion"] .app-shell {
   outline: 1px solid color-mix(in srgb, var(--note-pop, var(--note-accent)) 35%, transparent);
 }
 
+/* Broad glass interaction is confined to the rim, never composited over text. */
+.note-edge-effects {
+  position: absolute;
+  inset: 0;
+  z-index: 12;
+  border-radius: inherit;
+  pointer-events: none;
+  --edge-strength: 0;
+}
+
+.note-edge-effects[hidden],
+.note-edge-effects[data-active="false"] {
+  display: none;
+}
+
+.note-edge-rim,
+.note-edge-glow {
+  position: absolute;
+  inset: 0;
+  padding: 2px;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: var(--edge-strength);
+  background: radial-gradient(
+    260px circle at var(--edge-x, 50%) var(--edge-y, 50%),
+    color-mix(in srgb, var(--note-accent) 30%, #fff),
+    color-mix(in srgb, var(--note-accent) 40%, transparent) 38%,
+    transparent 82%
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  transition: opacity 160ms ease;
+}
+
+.note-edge-glow {
+  padding: 12px;
+  opacity: calc(var(--edge-strength) * 0.24);
+  filter: blur(5px);
+}
+
+.note-paper-peel {
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+}
+
+.note-edge-effects[data-material="glass"] .note-paper-peel,
+.note-edge-effects[data-material="paper"] .note-edge-rim,
+.note-edge-effects[data-material="paper"] .note-edge-glow {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce), (prefers-contrast: more), (forced-colors: active) {
+  .note-edge-effects {
+    display: none;
+  }
+}
+
+
+/* Material fallback: the content never depends on transparency for contrast. */
+@supports not (backdrop-filter: blur(1px)) {
+  .note-toolbar,
+  .composer {
+    background: var(--note-bg);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .note-toolbar,
+  .composer {
+    background: var(--note-bg);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    box-shadow: none;
+    border-color: var(--note-fg);
+  }
+
+  .group-actions,
+  .task-del {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+
+  .icon-btn:active,
+  .btn-primary:not(:disabled):active {
+    transform: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .app-shell:has(.settings-panel),
+  .settings-panel {
+    color-scheme: light dark;
+  }
+
+  .sticky-note,
+  .note-toolbar,
+  .composer,
+  .settings-panel,
+  .group-tasks,
+  .composer-input {
+    background: Canvas;
+    color: CanvasText;
+    border: 1px solid CanvasText;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    box-shadow: none;
+  }
+
+  .group-actions,
+  .task-del {
+    opacity: 1;
+  }
+}
+
+@supports (content-visibility: auto) {
+  .task-item {
+    content-visibility: auto;
+    contain-intrinsic-block-size: auto 56px;
+  }
+}
+
+@media (max-width: 300px) {
+  .app-shell { padding: 4px; }
+  .note-header { flex-wrap: wrap; gap: 6px; padding: 8px; }
+  .note-title { flex-basis: 100%; min-width: 0; font-size: 16px; white-space: normal; overflow-wrap: anywhere; }
+  .note-toolbar { flex-wrap: wrap; flex-shrink: 1; max-width: 100%; border-radius: 16px; }
+  .note-toolbar .icon-btn { flex: 0 0 30px; }
+  .note-footer { flex-wrap: wrap; gap: 4px; padding: 8px; }
+  .task-list { padding-inline: 4px; }
+  .task-item { gap: 6px; padding: 6px; }
+  .theme-grid, .theme-grid-wide { grid-template-columns: minmax(0, 1fr); }
+  .theme-mode-header, .btn-row { flex-wrap: wrap; }
+  .theme-card { min-width: 0; overflow-wrap: anywhere; }
+  .settings-body { padding-inline: 6px; overflow-wrap: anywhere; }
+  .composer { width: calc(100% - 8px); margin: 4px; padding: 8px; gap: 8px; }
+  .composer-head, .composer-actions { flex-wrap: wrap; }
+  .composer-actions > button { flex: 1 1 80px; min-width: 0; }
+}
+
+
+@media (max-height: 300px) {
+  /* Keep the native 100px minimum; scroll the chrome instead of losing controls. */
+  html:not([data-dock-phase="collapsed"]) .app-shell { overflow-y: auto; }
+  html:not([data-dock-phase="collapsed"]) .app-content,
+  html:not([data-dock-phase="collapsed"]) .app-view { min-height: 300px; }
+  .composer-backdrop { position: fixed; }
+  .composer, .composer-batch { max-height: calc(100% - 8px); overflow: auto; }
+  .composer-batch .composer-body { flex-shrink: 0; overflow: visible; }
+}
+
+@media (max-width: 180px) {
+  html:not([data-dock-phase="collapsed"]) .app-shell { overflow-y: auto; padding: 0; }
+  /* Keep a readable list below stacked chrome without raising the native minimum. */
+  html:not([data-dock-phase="collapsed"]) .app-content,
+  html:not([data-dock-phase="collapsed"]) .app-view { min-height: 500px; }
+  .task-list { padding-inline: 0; }
+  .task-item { flex-wrap: wrap; padding: 4px; gap: 4px; }
+  .task-body { flex: 1 1 100%; order: 1; }
+  .group-tasks { padding: 2px; }
+  .meta-chip { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+  .settings-header { flex-wrap: wrap; gap: 4px; padding: 8px 6px; }
+  .theme-mode-section { padding-inline: 4px; }
+}

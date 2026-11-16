@@ -1,4 +1,4 @@
-import { clamp, rand } from "../../math";
+import { rand } from "../../math";
 import type { DockEdge } from "../../types";
 import { contrastProfile } from "../../appearance";
 import { getFxAppearance } from "../../appearanceStore";
@@ -51,6 +51,3 @@ export function makeFringe(
   return items;
 }
 
-export function clampAlong(n: number, lo: number, hi: number) {
-  return clamp(n, lo, hi);
-}

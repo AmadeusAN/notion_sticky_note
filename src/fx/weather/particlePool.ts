@@ -19,25 +19,40 @@ export function createPool<T extends PoolSlot>(
   factory: () => T,
 ): ParticlePool<T> {
   const items = Array.from({ length: capacity }, () => factory());
+  const indices = new Map(items.map((item, index) => [item, index]));
+  const free = new Uint32Array(capacity);
+  const leased = new Uint8Array(capacity);
+  let freeCount = capacity;
+  for (let i = 0; i < capacity; i++) {
+    items[i]!.alive = false;
+    free[i] = capacity - i - 1;
+  }
 
   return {
     capacity,
     items,
     acquire() {
-      for (let i = 0; i < items.length; i++) {
-        const item = items[i]!;
-        if (!item.alive) {
-          item.alive = true;
-          return item;
-        }
-      }
-      return null;
+      if (freeCount === 0) return null;
+      const index = free[--freeCount]!;
+      const item = items[index]!;
+      leased[index] = 1;
+      item.alive = true;
+      return item;
     },
     release(item) {
+      const index = indices.get(item);
+      if (index === undefined || leased[index] === 0) return;
+      leased[index] = 0;
       item.alive = false;
+      free[freeCount++] = index;
     },
     clear() {
-      for (const item of items) item.alive = false;
+      for (let i = 0; i < capacity; i++) {
+        items[i]!.alive = false;
+        leased[i] = 0;
+        free[i] = capacity - i - 1;
+      }
+      freeCount = capacity;
     },
     forEachAlive(fn) {
       for (let i = 0; i < items.length; i++) {
@@ -46,9 +61,7 @@ export function createPool<T extends PoolSlot>(
       }
     },
     aliveCount() {
-      let n = 0;
-      for (const item of items) if (item.alive) n++;
-      return n;
+      return capacity - freeCount;
     },
   };
 }

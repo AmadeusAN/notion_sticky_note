@@ -87,7 +87,7 @@ export function createFireflySim(): FireflySim {
 
   const sim: FireflySim = {
     pool,
-    active: true,
+    active: false,
     panel: { x: 20, y: 20, w: 60, h: 60 },
 
     clear() {
@@ -168,7 +168,7 @@ export function createFireflySim(): FireflySim {
       pool.forEachAlive((p) => {
         p.life -= dt;
         if (p.life <= 0) {
-          p.alive = false;
+          pool.release(p);
           return;
         }
         const sway = windX(timeSec, p.phase, 12 + p.depth * 10);
@@ -186,13 +186,15 @@ export function createFireflySim(): FireflySim {
     draw(ctx, timeSec) {
       const sprite = getGlowSprite();
       const app = getFxAppearance();
+      const nearGain = particleGain(app, 1);
+      const farGain = particleGain(app, 0);
       pool.forEachAlive((p) => {
         const t = p.life / Math.max(0.001, p.maxLife);
         const fade = t < 0.15 ? t / 0.15 : t > 0.8 ? (1 - t) / 0.2 : 1;
         const breath =
           0.55 +
           0.45 * Math.sin(timeSec * p.pulse * 2.2 + p.phase);
-        const { mul, profile } = particleGain(app, p.depth);
+        const { mul, profile } = p.depth > 0.55 ? nearGain : farGain;
         const s =
           p.size *
           (0.75 + breath * 0.45) *

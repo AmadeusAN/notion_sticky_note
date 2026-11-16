@@ -1,6 +1,22 @@
 /* Shared FX appearance knobs — applied via documentElement CSS vars. */
 
-.fx-root {
+.fx-runtime-host {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+}
+
+.fx-runtime-host[data-active="false"] {
+  visibility: hidden;
+}
+
+.fx-runtime-host[data-static="true"] .fx-root,
+.fx-runtime-host[data-static="true"] .fx-root * {
+  animation: none !important;
+  transition: none !important;
+}
+
+:root {
   --fx-intensity: 1;
   --fx-near-mul: 1;
   --fx-far-mul: 1;

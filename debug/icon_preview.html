@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sticky Note · 应用图标</title>
+<link rel="icon" type="image/svg+xml" href="../src-tauri/icons/app.svg">
+<style>
+*{box-sizing:border-box}body{margin:0;background:#eef1ef;color:#26312e;font:14px/1.6 "Segoe UI Variable","Segoe UI",system-ui,sans-serif}main{max-width:1080px;margin:0 auto;padding:44px 30px}header{margin-bottom:28px}h1{font-size:28px;letter-spacing:-.04em;margin:0 0 7px}p{margin:0;color:#6b7771}.layout{display:grid;grid-template-columns:340px 1fr;gap:24px}.hero{border-radius:28px;background:#f9faf7;display:flex;align-items:center;justify-content:center;min-height:410px;flex-direction:column;padding:30px;gap:23px;border:1px solid #dce3dc}.hero img{width:256px;height:256px}.hero strong{font-size:20px;font-weight:600}.hero small{color:#6b7771}.samples{display:flex;flex-direction:column;gap:16px}.panel{border-radius:22px;padding:20px 24px;background:#f9faf7;border:1px solid #dce3dc}.panel.dark{background:#17211f;color:#ecf2ec;border-color:#263a32}.panel h2{font-size:13px;margin:0 0 20px;font-weight:600}.row{display:flex;align-items:flex-end;gap:26px;min-height:97px}.sample{display:flex;align-items:center;gap:10px;flex-direction:column;min-width:32px}.sample img{display:block;object-fit:contain;flex-shrink:0}.sample span{font-size:11px;color:#7e8b83}.dark .sample span{color:#a8bab0}.tray{display:flex;align-items:center;gap:18px;min-height:48px}.tray>span{font-size:12px;color:#7e8b83;margin-right:8px}.tray img{display:block;object-fit:contain}.explain{margin-top:24px;padding:20px 2px;border-top:1px solid #d4ddd5;font-size:13px;display:flex;gap:32px;flex-wrap:wrap}.explain strong{font-weight:600;color:#354b40}.explain p{max-width:470px}.label{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#388770;margin-bottom:9px}@media(max-width:820px){main{padding:26px 20px}.layout{grid-template-columns:1fr}.hero{min-height:350px}.row{gap:22px;justify-content:space-between}.hero img{width:220px;height:220px}.panel{padding:20px}.explain{gap:12px}}@media(prefers-color-scheme:dark){body{background:#101716;color:#eef4ef}.hero,.panel{background:#1a2420;border-color:#2b3932}.hero small,p{color:#a3b4a9}.panel.light{background:#f9faf7;color:#26312e}.explain{border-color:#2b3932}.explain strong{color:#c3decf}}
+</style>
+</head>
+<body><main>
+<header><div class="label">Sticky Note · App identity</div><h1>记录一件事，完成一件事。</h1><p>石墨底色 · 暖白便签 · 薄荷绿勾选。原始 SVG 与 Windows 多尺寸图标采用同一套识别符号。</p></header>
+<div class="layout">
+<section class="hero" aria-label="主图标"><img src="../src-tauri/icons/icon.png" alt="石墨色底、暖白折角便签和绿色勾选的应用图标"><div style="text-align:center"><strong>Sticky Note</strong><br><small>便签与待办</small></div></section>
+<div class="samples">
+<section class="panel light"><h2>桌面图标 · 浅色背景 / 实际尺寸</h2><div class="row">
+<div class="sample"><img src="../src-tauri/icons/16x16.png" width="16" height="16" alt="16 像素"><span>16px</span></div><div class="sample"><img src="../src-tauri/icons/20x20.png" width="20" height="20" alt="20 像素"><span>20px</span></div><div class="sample"><img src="../src-tauri/icons/24x24.png" width="24" height="24" alt="24 像素"><span>24px</span></div><div class="sample"><img src="../src-tauri/icons/32x32.png" width="32" height="32" alt="32 像素"><span>32px</span></div><div class="sample"><img src="../src-tauri/icons/64x64.png" width="64" height="64" alt="64 像素"><span>64px</span></div>
+</div></section>
+<section class="panel dark"><h2>桌面图标 · 深色背景 / 实际尺寸</h2><div class="row">
+<div class="sample"><img src="../src-tauri/icons/16x16.png" width="16" height="16" alt="深色背景 16 像素"><span>16px</span></div><div class="sample"><img src="../src-tauri/icons/20x20.png" width="20" height="20" alt="深色背景 20 像素"><span>20px</span></div><div class="sample"><img src="../src-tauri/icons/24x24.png" width="24" height="24" alt="深色背景 24 像素"><span>24px</span></div><div class="sample"><img src="../src-tauri/icons/32x32.png" width="32" height="32" alt="深色背景 32 像素"><span>32px</span></div><div class="sample"><img src="../src-tauri/icons/64x64.png" width="64" height="64" alt="深色背景 64 像素"><span>64px</span></div>
+</div></section>
+<section class="panel light"><div class="tray"><span>托盘精简版</span><img src="../src-tauri/icons/tray.png" width="16" height="16" alt="16 像素托盘图标"><img src="../src-tauri/icons/tray.png" width="24" height="24" alt="24 像素托盘图标"><img src="../src-tauri/icons/tray.png" width="32" height="32" alt="32 像素托盘图标"></div></section>
+<section class="panel dark"><div class="tray"><span>托盘深色背景</span><img src="../src-tauri/icons/tray.png" width="16" height="16" alt="深色背景托盘图标"><img src="../src-tauri/icons/tray.png" width="24" height="24" alt="深色背景 24 像素托盘图标"><img src="../src-tauri/icons/tray.png" width="32" height="32" alt="深色背景 32 像素托盘图标"></div></section>
+</div></div>
+<footer class="explain"><p><strong>便签轮廓 + 折角</strong><br>表达记录、随手记和轻量的纸张感。</p><p><strong>明确的勾选</strong><br>表达待办与完成；小尺寸版本主动减少细节，而不是机械缩小大图。</p></footer>
+</main></body></html>

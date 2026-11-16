@@ -22,6 +22,9 @@ isProject: false
 
 # Windows 写实便签 + Notion 同步开发计划
 
+> 本文保留初始开发计划供历史参考，功能现状以 [README.md](README.md) 和源码为准。原 Phase 4 的整窗倾斜／斜切和整窗 Acrylic 已由稳定正文、局部玻璃材质与无过冲贴边滑动替代。
+
+
 ## 现状与目标
 
 工作区目前仅有 [ref.md](ref.md)，无源码脚手架。交付物是 **Windows 桌面便签应用**（非 VS Code 插件）；其中的「Notion 插件」指 **Notion Integration + 应用内连接器**。

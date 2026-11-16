@@ -33,11 +33,7 @@ export interface ThemeConfig {
   popSoft: string;
   tray?: string;
   card?: string;
-  shadow: string;
   border: string;
-  blur: boolean;
-  opacity: number;
-  acrylic: boolean;
   surface: ThemeSurface;
 }
 
@@ -54,29 +50,21 @@ export const themes: Record<ThemeId, ThemeConfig> = {
     accent: "#c45c26",
     pop: "#c45c26",
     popSoft: "rgba(196, 92, 38, 0.12)",
-    shadow: "0 18px 40px rgba(40, 28, 8, 0.28)",
     border: "rgba(120, 90, 40, 0.18)",
-    blur: false,
-    opacity: 1,
-    acrylic: false,
     surface: "paper",
   },
   glass: {
     id: "glass",
-    label: "Glass",
+    label: "Glass Mist",
     group: "flat",
     mode: "light",
-    background: "rgba(230, 238, 248, 0.45)",
+    background: "#eaf0f8",
     foreground: "#1c2430",
     muted: "#5b6b7c",
     accent: "#2f6fed",
     pop: "#2f6fed",
     popSoft: "rgba(47, 111, 237, 0.12)",
-    shadow: "0 18px 42px rgba(20, 35, 60, 0.28)",
     border: "rgba(255, 255, 255, 0.35)",
-    blur: true,
-    opacity: 0.95,
-    acrylic: true,
     surface: "glass",
   },
   dark: {
@@ -90,11 +78,7 @@ export const themes: Record<ThemeId, ThemeConfig> = {
     accent: "#e0a45a",
     pop: "#e0a45a",
     popSoft: "rgba(224, 164, 90, 0.16)",
-    shadow: "0 18px 40px rgba(0, 0, 0, 0.45)",
     border: "rgba(255, 255, 255, 0.08)",
-    blur: false,
-    opacity: 0.98,
-    acrylic: false,
     surface: "flat",
   },
   notion: {
@@ -108,11 +92,7 @@ export const themes: Record<ThemeId, ThemeConfig> = {
     accent: "#2383e2",
     pop: "#2383e2",
     popSoft: "rgba(35, 131, 226, 0.12)",
-    shadow: "0 12px 32px rgba(15, 15, 15, 0.12)",
     border: "rgba(55, 53, 47, 0.12)",
-    blur: false,
-    opacity: 1,
-    acrylic: false,
     surface: "flat",
   },
   notionDark: {
@@ -126,11 +106,7 @@ export const themes: Record<ThemeId, ThemeConfig> = {
     accent: "#529cca",
     pop: "#529cca",
     popSoft: "rgba(82, 156, 202, 0.18)",
-    shadow: "0 14px 36px rgba(0, 0, 0, 0.45)",
     border: "rgba(255, 255, 255, 0.1)",
-    blur: false,
-    opacity: 0.98,
-    acrylic: false,
     surface: "flat",
   },
   claude: {
@@ -144,11 +120,7 @@ export const themes: Record<ThemeId, ThemeConfig> = {
     accent: "#d97757",
     pop: "#d97757",
     popSoft: "rgba(217, 119, 87, 0.14)",
-    shadow: "0 16px 36px rgba(61, 57, 41, 0.16)",
     border: "rgba(61, 57, 41, 0.12)",
-    blur: false,
-    opacity: 1,
-    acrylic: false,
     surface: "flat",
   },
   google: {
@@ -162,12 +134,7 @@ export const themes: Record<ThemeId, ThemeConfig> = {
     accent: "#1a73e8",
     pop: "#ea4335",
     popSoft: "rgba(234, 67, 53, 0.1)",
-    shadow:
-      "0 1px 3px rgba(60, 64, 67, 0.2), 0 4px 12px rgba(60, 64, 67, 0.12)",
     border: "rgba(218, 220, 224, 1)",
-    blur: false,
-    opacity: 1,
-    acrylic: false,
     surface: "flat",
   },
 
@@ -185,11 +152,7 @@ export const themes: Record<ThemeId, ThemeConfig> = {
     accent: "#2383e2",
     pop: "#0f7b6c",
     popSoft: "rgba(15, 123, 108, 0.12)",
-    shadow: "0 8px 24px rgba(15,15,15,0.06)",
     border: "rgba(55, 53, 47, 0.08)",
-    blur: false,
-    opacity: 1,
-    acrylic: false,
     surface: "layered",
   },
   cardCoral: {
@@ -205,11 +168,7 @@ export const themes: Record<ThemeId, ThemeConfig> = {
     accent: "#ff6b4a",
     pop: "#e11d48",
     popSoft: "rgba(225, 29, 72, 0.1)",
-    shadow: "0 10px 28px rgba(60, 24, 12, 0.08)",
     border: "rgba(255, 120, 90, 0.14)",
-    blur: false,
-    opacity: 1,
-    acrylic: false,
     surface: "layered",
   },
   cardInk: {
@@ -225,11 +184,7 @@ export const themes: Record<ThemeId, ThemeConfig> = {
     accent: "#7c9cff",
     pop: "#34d399",
     popSoft: "rgba(52, 211, 153, 0.14)",
-    shadow: "0 12px 32px rgba(0,0,0,0.4)",
     border: "rgba(255, 255, 255, 0.07)",
-    blur: false,
-    opacity: 0.98,
-    acrylic: false,
     surface: "layered",
   },
   cardSky: {
@@ -245,11 +200,7 @@ export const themes: Record<ThemeId, ThemeConfig> = {
     accent: "#2f6fed",
     pop: "#f59e0b",
     popSoft: "rgba(245, 158, 11, 0.14)",
-    shadow: "0 10px 26px rgba(30, 60, 120, 0.08)",
     border: "rgba(47, 111, 237, 0.1)",
-    blur: false,
-    opacity: 1,
-    acrylic: false,
     surface: "layered",
   },
   cardMeadow: {
@@ -265,11 +216,7 @@ export const themes: Record<ThemeId, ThemeConfig> = {
     accent: "#2f9e6b",
     pop: "#a855f7",
     popSoft: "rgba(168, 85, 247, 0.12)",
-    shadow: "0 10px 26px rgba(20, 60, 40, 0.07)",
     border: "rgba(47, 158, 107, 0.12)",
-    blur: false,
-    opacity: 1,
-    acrylic: false,
     surface: "layered",
   },
 
@@ -287,11 +234,7 @@ export const themes: Record<ThemeId, ThemeConfig> = {
     accent: "#6366f1",
     pop: "#22d3ee",
     popSoft: "rgba(34, 211, 238, 0.14)",
-    shadow: "0 14px 36px rgba(60, 80, 160, 0.14)",
     border: "rgba(99, 102, 241, 0.18)",
-    blur: false,
-    opacity: 1,
-    acrylic: false,
     surface: "motion",
   },
   sunsetMotion: {
@@ -307,11 +250,7 @@ export const themes: Record<ThemeId, ThemeConfig> = {
     accent: "#f97316",
     pop: "#ec4899",
     popSoft: "rgba(236, 72, 153, 0.12)",
-    shadow: "0 14px 36px rgba(180, 60, 40, 0.12)",
     border: "rgba(249, 115, 22, 0.18)",
-    blur: false,
-    opacity: 1,
-    acrylic: false,
     surface: "motion",
   },
   inkMotion: {
@@ -327,11 +266,7 @@ export const themes: Record<ThemeId, ThemeConfig> = {
     accent: "#818cf8",
     pop: "#34d399",
     popSoft: "rgba(52, 211, 153, 0.14)",
-    shadow: "0 16px 40px rgba(0,0,0,0.45)",
     border: "rgba(129, 140, 248, 0.22)",
-    blur: false,
-    opacity: 0.98,
-    acrylic: false,
     surface: "motion",
   },
 };
@@ -341,18 +276,6 @@ export const themeIds = Object.keys(themes) as ThemeId[];
 export const DEFAULT_LIGHT_THEME: ThemeId = "paper";
 export const DEFAULT_DARK_THEME: ThemeId = "dark";
 
-export const lightThemeIds = themeIds.filter(
-  (id) => themes[id].mode === "light",
-);
-export const darkThemeIds = themeIds.filter((id) => themes[id].mode === "dark");
-
-export const flatThemeIds = themeIds.filter((id) => themes[id].group === "flat");
-export const layeredThemeIds = themeIds.filter(
-  (id) => themes[id].group === "layered",
-);
-export const motionThemeIds = themeIds.filter(
-  (id) => themes[id].group === "motion",
-);
 
 export function themesInMode(
   mode: ThemeMode,

@@ -1,4 +1,5 @@
 export { WeatherCanvas, type WeatherFrameFn } from "./WeatherCanvas";
+export { type WeatherCanvasController } from "./frameLoop";
 export { createPool, type ParticlePool, type PoolSlot } from "./particlePool";
 export { getWeatherSprites, type WeatherSprites } from "./sprites";
 export {

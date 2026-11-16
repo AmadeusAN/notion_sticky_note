@@ -5,11 +5,10 @@ import {
 } from "./appearance";
 import {
   getFxAppearance,
-  setFxAppearance,
   subscribeFxAppearance,
 } from "./appearanceStore";
 
-export function useFxAppearance(): FxAppearance {
+function useFxAppearance(): FxAppearance {
   return useSyncExternalStore(
     subscribeFxAppearance,
     getFxAppearance,
@@ -33,4 +32,3 @@ export function useFxAppearanceCss() {
   return appearance;
 }
 
-export { setFxAppearance, getFxAppearance };
