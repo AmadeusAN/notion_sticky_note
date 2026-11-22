@@ -1,6 +1,6 @@
 [package]
 name = "sticky-note"
-version = "0.2.1"
+version = "0.2.2"
 description = "Realistic Windows sticky note with Notion sync"
 authors = ["sticky-note"]
 license = "MIT"
