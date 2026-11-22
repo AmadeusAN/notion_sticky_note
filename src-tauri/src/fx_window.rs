@@ -43,6 +43,47 @@ pub fn set_enabled(app: &AppHandle, enabled: bool) {
     }
 }
 
+#[cfg(windows)]
+fn configure_fx_overlay_window(fx: &tauri::WebviewWindow) {
+    use windows::Win32::Foundation::{BOOL, HWND};
+    use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_TRANSITIONS_FORCEDISABLED};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, SWP_FRAMECHANGED,
+        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_EX_APPWINDOW, WS_EX_NOACTIVATE,
+        WS_EX_TOOLWINDOW,
+    };
+
+    let Ok(hwnd) = fx.hwnd() else { return; };
+    let hwnd = HWND(hwnd.0);
+    unsafe {
+        let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        let next_style =
+            (style | (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE).0 as isize) & !(WS_EX_APPWINDOW.0 as isize);
+        if next_style != style {
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, next_style);
+            let _ = SetWindowPos(
+                hwnd,
+                HWND::default(),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            );
+        }
+        let disable = BOOL(1);
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_TRANSITIONS_FORCEDISABLED,
+            (&disable as *const BOOL).cast(),
+            std::mem::size_of::<BOOL>() as u32,
+        );
+    }
+}
+
+#[cfg(not(windows))]
+fn configure_fx_overlay_window(_fx: &tauri::WebviewWindow) {}
+
 pub fn create_fx_window(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     if app.get_webview_window(FX_LABEL).is_none() {
         emit_snapshot(app, app.state::<crate::AppState>().fx.reset_window());
@@ -59,6 +100,7 @@ pub fn create_fx_window(app: &AppHandle) -> Result<(), Box<dyn std::error::Error
             .focused(false)
             .build()?;
         fx.set_ignore_cursor_events(true)?;
+        configure_fx_overlay_window(&fx);
         let handle = app.clone();
         fx.on_window_event(move |event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
@@ -231,7 +273,9 @@ pub fn hide_fx(app: &AppHandle) {
     if let Err(error) = app.run_on_main_thread(move || {
         if presentation_epoch(&handle) != Some(epoch) { return; }
         if let Some(fx) = handle.get_webview_window(FX_LABEL) {
-            if let Err(error) = fx.hide() { eprintln!("Hide FX window failed: {error}"); }
+            if fx.is_visible().unwrap_or(false) {
+                if let Err(error) = fx.hide() { eprintln!("Hide FX window failed: {error}"); }
+            }
         }
         emit_snapshot(&handle, handle.state::<crate::AppState>().fx.apply_hidden(epoch));
     }) {
