@@ -197,7 +197,11 @@ pub fn play_fx_scatter(
 ) {
     with_presented_fx(app, move |app, main, fx, epoch| {
         let panel = layout_fx(main, fx, panel_pos, panel_size)?;
+        let was_visible = fx.is_visible().unwrap_or(false);
         fx.show().map_err(|error| error.to_string())?;
+        if !was_visible {
+            crate::window::refresh_transparent_surface_force(fx);
+        }
         raise_fx_above_main(main, fx);
         emit_snapshot(app, app.state::<crate::AppState>().fx.apply_layout(epoch, edge, panel));
         emit_action(app, epoch, FxActionPayload::Scatter(FxScatterPayload { kind, edge, panel }));
@@ -210,7 +214,11 @@ pub fn keep_fx_overlay(
 ) {
     with_presented_fx(app, move |app, main, fx, epoch| {
         let panel = layout_fx(main, fx, panel_pos, panel_size)?;
+        let was_visible = fx.is_visible().unwrap_or(false);
         fx.show().map_err(|error| error.to_string())?;
+        if !was_visible {
+            crate::window::refresh_transparent_surface_force(fx);
+        }
         raise_fx_above_main(main, fx);
         emit_snapshot(app, app.state::<crate::AppState>().fx.apply_layout(epoch, edge, panel));
         Ok(())

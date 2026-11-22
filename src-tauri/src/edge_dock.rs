@@ -15,7 +15,6 @@ const UNDOCK_PX: i64 = 72;
 const MOVE_DEBOUNCE_MS: u64 = 220;
 const POLL_MS: u64 = 16;
 const SLIDE_DURATION_MS: u64 = 180;
-const SLIDE_FRAME_MS: u64 = 8;
 const POST_SLIDE_IGNORE_MS: u64 = 450;
 const LEAVE_COLLAPSE_MS: u64 = 40;
 const EXPAND_HOLD_MS: u64 = SLIDE_DURATION_MS + 100;
@@ -281,6 +280,7 @@ impl EdgeDock {
                 }
                 win.unminimize().map_err(|e| e.to_string())?;
                 win.show().map_err(|e| e.to_string())?;
+                crate::window::refresh_transparent_surface_force(win);
                 Ok((state, monitor))
             })();
             // Failure must reflect actual visibility, not leave a visible window suspended.
@@ -581,6 +581,9 @@ impl EdgeDock {
         let kind = if phase == DockPhase::Collapsed { "collapse" } else { "expand" };
         let fx_pos = if phase == DockPhase::Expanded { target } else { pos };
         crate::fx_window::play_fx_scatter(app, edge, kind, fx_pos, size);
+        if phase == DockPhase::Expanded {
+            crate::window::refresh_transparent_surface(win);
+        }
         self.slide_window_to(app, win, pos, target);
     }
 
@@ -605,10 +608,13 @@ impl EdgeDock {
             });
             (id, generation)
         };
+        let target_interval = frame_interval_for_hz(monitor_refresh_hz(win));
         let dock = self.clone();
         let app = app.clone();
         let win = win.clone();
-        tauri::async_runtime::spawn(async move {
+        tauri::async_runtime::spawn_blocking(move || {
+            let mut pacer = FramePacer::new(target_interval);
+            let mut last_position: Option<PhysicalPosition<i32>> = None;
             loop {
                 let queued = {
                     let mut inner = dock.inner.lock().unwrap();
@@ -618,27 +624,32 @@ impl EdgeDock {
                     }
                 };
                 if !queued { break; }
-                let (send, receive) = tokio::sync::oneshot::channel();
+                let (send, receive) = std::sync::mpsc::sync_channel::<(bool, Option<PhysicalPosition<i32>>)>(1);
                 let dock_ui = dock.clone();
                 let app_ui = app.clone();
                 let win_ui = win.clone();
+                let prev_position = last_position;
                 if win.run_on_main_thread(move || {
                     let current = {
                         let inner = dock_ui.inner.lock().unwrap();
                         inner.generation == generation && inner.presented && !inner.suspended
                             && inner.slide.as_ref().map(|s| s.id == id).unwrap_or(false)
                     };
-                    if !current { let _ = send.send(false); return; }
+                    if !current { let _ = send.send((false, prev_position)); return; }
                     if !win_ui.is_visible().unwrap_or(false) || win_ui.is_minimized().unwrap_or(true) {
                         dock_ui.suspend(&app_ui);
                         crate::fx_window::hide_fx(&app_ui);
-                        let _ = send.send(false);
+                        let _ = send.send((false, prev_position));
                         return;
                     }
                     let frame = dock_ui.inner.lock().unwrap().frame(id, generation, Instant::now());
-                    let Some((position, terminal)) = frame else { let _ = send.send(false); return; };
+                    let Some((position, terminal)) = frame else { let _ = send.send((false, prev_position)); return; };
                     // No API call occurs with the state lock held.
-                    let moved = win_ui.set_position(tauri::Position::Physical(position)).is_ok();
+                    let moved = if !terminal && prev_position == Some(position) {
+                        true
+                    } else {
+                        win_ui.set_position(tauri::Position::Physical(position)).is_ok()
+                    };
                     dock_ui.inner.lock().unwrap().finish_frame(id, generation, terminal, moved, Instant::now());
                     if terminal && moved && dock_ui.is_current_generation(generation) {
                         dock_ui.sync_current_fx(&app_ui, &win_ui);
@@ -646,15 +657,17 @@ impl EdgeDock {
                         dock_ui.queue_persistence(&app_ui);
                     }
                     dock_ui.wake.notify_one();
-                    let _ = send.send(moved && !terminal);
+                    let _ = send.send((moved && !terminal, if moved { Some(position) } else { prev_position }));
                 }).is_err() {
                     let mut inner = dock.inner.lock().unwrap();
                     inner.finish_frame(id, generation, false, false, Instant::now());
                     dock.wake.notify_one();
                     break;
                 }
-                if !receive.await.unwrap_or(false) { break; }
-                tokio::time::sleep(Duration::from_millis(SLIDE_FRAME_MS)).await;
+                let Ok((keep_going, next_pos)) = receive.recv() else { break; };
+                last_position = next_pos;
+                if !keep_going { break; }
+                pacer.wait_next_frame();
             }
         });
     }
@@ -767,6 +780,182 @@ fn cursor_in_expanded_margin(cursor: PhysicalPosition<i32>, edge: DockEdge,
 fn ease_out_cubic(t: f64) -> f64 {
     let u = 1.0 - t.clamp(0.0, 1.0);
     1.0 - u * u * u
+}
+
+fn frame_interval_for_hz(hz: Option<u32>) -> Duration {
+    let effective = match hz {
+        Some(v) if v > 1 => v.clamp(30, 360),
+        _ => 60,
+    };
+    Duration::from_nanos(1_000_000_000 / u64::from(effective))
+}
+
+fn should_fallback_from_dwm(elapsed: Duration, target_interval: Duration) -> bool {
+    elapsed < Duration::from_millis(1)
+        || elapsed.as_secs_f64() > target_interval.as_secs_f64() * 1.35
+}
+
+#[cfg(windows)]
+fn monitor_refresh_hz(win: &WebviewWindow) -> Option<u32> {
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Gdi::{
+        EnumDisplaySettingsW, GetMonitorInfoW, MonitorFromWindow, DEVMODEW, ENUM_CURRENT_SETTINGS,
+        MONITORINFO, MONITORINFOEXW, MONITOR_DEFAULTTONEAREST,
+    };
+
+    let hwnd = win.hwnd().ok()?;
+    unsafe {
+        let monitor = MonitorFromWindow(HWND(hwnd.0), MONITOR_DEFAULTTONEAREST);
+        if monitor.is_invalid() {
+            return None;
+        }
+        let mut info = MONITORINFOEXW::default();
+        info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+        if !GetMonitorInfoW(monitor, &mut info as *mut MONITORINFOEXW as *mut MONITORINFO).as_bool() {
+            return None;
+        }
+        let mut dm = DEVMODEW {
+            dmSize: std::mem::size_of::<DEVMODEW>() as u16,
+            ..Default::default()
+        };
+        if !EnumDisplaySettingsW(
+            PCWSTR(info.szDevice.as_ptr()),
+            ENUM_CURRENT_SETTINGS,
+            &mut dm,
+        )
+        .as_bool()
+        {
+            return None;
+        }
+        (dm.dmDisplayFrequency > 1).then_some(dm.dmDisplayFrequency)
+    }
+}
+
+#[cfg(not(windows))]
+fn monitor_refresh_hz(_win: &WebviewWindow) -> Option<u32> {
+    None
+}
+
+#[cfg(windows)]
+struct HighResTimer(windows::Win32::Foundation::HANDLE);
+
+#[cfg(windows)]
+impl HighResTimer {
+    fn new() -> Option<Self> {
+        use windows::core::PCWSTR;
+        use windows::Win32::System::Threading::{
+            CreateWaitableTimerExW, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS,
+        };
+        unsafe {
+            CreateWaitableTimerExW(
+                None,
+                PCWSTR::null(),
+                CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                TIMER_ALL_ACCESS.0,
+            )
+            .ok()
+            .filter(|handle| !handle.is_invalid())
+            .map(Self)
+        }
+    }
+
+    fn wait(&self, duration: Duration) -> bool {
+        use windows::Win32::Foundation::WAIT_OBJECT_0;
+        use windows::Win32::System::Threading::{SetWaitableTimer, WaitForSingleObject, INFINITE};
+        if duration.is_zero() {
+            return true;
+        }
+        let due_time = -((duration.as_nanos() / 100).clamp(1, i64::MAX as u128) as i64);
+        unsafe {
+            if SetWaitableTimer(self.0, &due_time, 0, None, None, false).is_err() {
+                return false;
+            }
+            WaitForSingleObject(self.0, INFINITE) == WAIT_OBJECT_0
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for HighResTimer {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = windows::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+
+#[cfg(windows)]
+struct FramePacer {
+    target_interval: Duration,
+    use_dwm_flush: bool,
+    timer: Option<HighResTimer>,
+    timer_failed: bool,
+}
+
+#[cfg(windows)]
+impl FramePacer {
+    fn new(target_interval: Duration) -> Self {
+        Self {
+            target_interval,
+            use_dwm_flush: true,
+            timer: None,
+            timer_failed: false,
+        }
+    }
+
+    fn wait_next_frame(&mut self) {
+        if self.use_dwm_flush {
+            let before = Instant::now();
+            let dwm_ok = unsafe { windows::Win32::Graphics::Dwm::DwmFlush().is_ok() };
+            if dwm_ok {
+                let elapsed = before.elapsed();
+                if should_fallback_from_dwm(elapsed, self.target_interval) {
+                    self.use_dwm_flush = false;
+                    if elapsed < Duration::from_millis(1) {
+                        self.wait_timer(self.target_interval.saturating_sub(elapsed));
+                    }
+                }
+                return;
+            }
+            self.use_dwm_flush = false;
+        }
+        self.wait_timer(self.target_interval);
+    }
+
+    fn wait_timer(&mut self, duration: Duration) {
+        if duration.is_zero() {
+            return;
+        }
+        if !self.timer_failed && self.timer.is_none() {
+            self.timer = HighResTimer::new();
+            if self.timer.is_none() {
+                self.timer_failed = true;
+            }
+        }
+        if let Some(timer) = &self.timer {
+            if timer.wait(duration) {
+                return;
+            }
+        }
+        std::thread::sleep(duration);
+    }
+}
+
+#[cfg(not(windows))]
+struct FramePacer {
+    target_interval: Duration,
+}
+
+#[cfg(not(windows))]
+impl FramePacer {
+    fn new(target_interval: Duration) -> Self {
+        Self { target_interval }
+    }
+
+    fn wait_next_frame(&mut self) {
+        std::thread::sleep(self.target_interval);
+    }
 }
 
 #[cfg(windows)]
@@ -1103,5 +1292,41 @@ mod tests {
             assert!((previous..=1.0).contains(&progress));
             previous = progress;
         }
+    }
+
+    #[test]
+    fn frame_interval_matches_monitor_refresh_rates() {
+        assert_eq!(
+            frame_interval_for_hz(Some(180)),
+            Duration::from_nanos(1_000_000_000 / 180)
+        );
+        assert_eq!(
+            frame_interval_for_hz(Some(144)),
+            Duration::from_nanos(1_000_000_000 / 144)
+        );
+        assert_eq!(
+            frame_interval_for_hz(Some(60)),
+            Duration::from_nanos(1_000_000_000 / 60)
+        );
+        assert_eq!(
+            frame_interval_for_hz(None),
+            Duration::from_nanos(1_000_000_000 / 60)
+        );
+        assert_eq!(
+            frame_interval_for_hz(Some(1)),
+            Duration::from_nanos(1_000_000_000 / 60)
+        );
+        assert_eq!(
+            frame_interval_for_hz(Some(500)),
+            Duration::from_nanos(1_000_000_000 / 360)
+        );
+    }
+
+    #[test]
+    fn dwm_fallback_detects_fast_return_and_mismatched_refresh() {
+        let hz180 = frame_interval_for_hz(Some(180));
+        assert!(should_fallback_from_dwm(Duration::from_micros(200), hz180));
+        assert!(!should_fallback_from_dwm(Duration::from_micros(5550), hz180));
+        assert!(should_fallback_from_dwm(Duration::from_millis(16), hz180));
     }
 }

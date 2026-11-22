@@ -449,7 +449,6 @@ pub fn run() {
 
             let _ = window::apply_always_on_top(&win);
             let _ = window::disable_system_snap_assist(&win);
-            let _ = window::apply_theme_effects(&win, &settings.theme);
             edge_dock.restore_on_startup(app.handle(), &win)?;
             edge_dock.spawn_cursor_poller(app.handle().clone());
             let win_clone = win.clone();
@@ -479,6 +478,7 @@ pub fn run() {
                         Ok(false) => {
                             if matches!(event, WindowEvent::ScaleFactorChanged { .. }) {
                                 dock_for_events.on_scale_changed(&app_handle);
+                                window::refresh_transparent_surface_force(&win_clone);
                             } else {
                                 dock_for_events.on_user_resized(&app_handle);
                             }
@@ -494,6 +494,10 @@ pub fn run() {
                         if let Err(error) = dock_for_events.reveal(&app_handle, &win_clone) {
                             eprintln!("Window activation restore failed: {error}");
                         }
+                    } else if win_clone.is_visible().unwrap_or(false)
+                        && !win_clone.is_minimized().unwrap_or(true)
+                    {
+                        window::refresh_transparent_surface(&win_clone);
                     }
                     fx_window::raise_fx_if_visible(&app_handle);
                 }
