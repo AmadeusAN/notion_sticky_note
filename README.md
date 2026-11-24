@@ -2,23 +2,41 @@
 
 **English** · [简体中文](README.zh-CN.md) · [Download Windows Installer](https://github.com/AmadeusAN/notion_sticky_note/releases/latest)
 
-An always-on-top Windows desktop sticky note and task manager with smooth edge docking, customizable themes & ambient effects, local task groups, and optional Notion database sync. Built with Tauri 2, React, and Rust.
+A dual-mode Windows desktop productivity app: dock it as a translucent, always-on-top **Sticky Note** on your screen edge, or expand into a full-screen **Desktop Workspace** featuring an Editorial Home dashboard, Focus-Lens Calendar, animated Unscheduled Constellation graph, Kanban Board, and optional two-way Notion sync. Built with Tauri 2, React, and Rust.
 
 ## Screenshots
 
-| Classic Paper | Dark Layered (`Ink Stack`) | Settings |
-|---|---|---|
-| ![Main panel in Classic Paper theme](docs/screenshots/main-en.png) | ![Main panel in Ink Stack dark theme](docs/screenshots/main-dark-en.png) | ![Settings panel](docs/screenshots/settings-en.png) |
+### Workspace Home
+![Workspace Home with Editorial Mood Gallery, Focus Ring, 7-Day Rhythm, and Unscheduled Constellation](docs/screenshots/workspace-home-en.png)
 
-[View Chinese screenshots](README.zh-CN.md#界面预览)
+### Calendar, Constellation Graph, Board & Desktop Settings
+
+| Interactive Calendar (`Smooth Focus Lens` & Drag-to-Resize) | Unscheduled Task Constellation (`List` / `Board`) |
+|---|---|
+| ![Calendar Month view with Smooth Focus Lens and right-edge drag handle](docs/screenshots/workspace-calendar-en.png) | ![Unscheduled task constellation modal with force-directed graph](docs/screenshots/workspace-constellation-en.png) |
+| **Kanban Board & Task Inspector** | **Desktop Settings (`>= 720px` Two-Pane Layout)** |
+| ![Kanban Board with right-side Task Inspector drawer](docs/screenshots/workspace-board-en.png) | ![Desktop Settings panel with Calendar Focus Lens and Gallery source controls](docs/screenshots/settings-desktop-en.png) |
+
+### Sticky Note Mode (Compact & Docked)
+
+| Classic Paper | Dark Layered (`Ink Stack`) | Compact Settings |
+|---|---|---|
+| ![Sticky mode in Classic Paper theme](docs/screenshots/main-en.png) | ![Sticky mode in Ink Stack dark theme](docs/screenshots/main-dark-en.png) | ![Compact sticky settings panel](docs/screenshots/settings-en.png) |
+
+[View Chinese documentation &amp; sticky screenshots](README.zh-CN.md)
 
 ## Features
 
-- **Always-on-top & Edge Docking:** Pin the note above other windows, drag it to any screen edge to tuck into a compact strip, and hover to slide out smoothly — synced natively to high-refresh-rate displays (60Hz / 144Hz / 180Hz+).
-- **Local Tasks & Archive:** Works offline without Notion. Organize tasks into local groups, bulk-import multiple tasks separated by `;` or `；`, and move completed items to **Archive** (with one-click uncheck restore).
-- **Optional Notion Sync:** Pull today's tasks and active multi-day tasks from a Notion database; checking items updates Notion immediately and queues offline retries automatically if disconnected.
-- **15 Themes & 8 Edge Effects:** Choose separate Light and Dark themes (Paper, Glass, Notion, Claude, Google, layered cards, and animated motion themes) that follow your Windows mode, paired with edge effects like leaves, sakura, snow, rain, icicles, fireflies, ink, and vines.
-- **Tray-Resident & Bilingual:** Closing (`×` / `Alt+F4`) hides to the system tray instead of quitting; supports English and Simplified Chinese (auto-detected from Windows or overridden in Settings) and optional **Start with Windows**.
+- **Dual-Mode Window (`Sticky Mode` ↔ `Workspace Mode`):** Keep a sleek floating sticky note pinned above other windows and tucked cleanly into any screen edge (native 60Hz / 144Hz / 180Hz+ smooth slide-out), or expand with one click into a responsive wide desktop workspace.
+- **Editorial Home Dashboard (`All tasks`):** Features a live clock greeting, quick capture bar, Today's Focus ring, Tomorrow Preview, interactive 7-Day Rhythm bars, and animated **Unscheduled Task Constellation** cluster modal.
+- **Mood Gallery (Local GIF & Online Feeds):** Display looping local PNG/JPG/WebP/GIF slideshows stored offline in IndexedDB, or pull randomized visual feeds from **Wallhaven** (with customizable add/remove keyword tags), public **Pinterest** board RSS feeds, and **Unsplash**, with automatic Windows system proxy / custom proxy support and click-to-open source links.
+- **Interactive Calendar (`Month` / `Week` / `Day`):**
+  - **Dynamic Focus Styles:** Choose between **Smooth Lens** (GPU-panned zoomed canvas + radial blur), **Elastic Mosaic**, or **Off**, plus an adjustable **Focus ROI Size** (`65%–145%`).
+  - **Fast Direct Manipulation:** Drag unscheduled tasks onto days or time slots, extend or shrink multi-day event spans horizontally directly from the right-edge arrow (`→`) handle on any card, and resize timed blocks vertically in Week/Day views.
+- **Kanban Board, Task Inspector & Apple-Style Reordering:** Organize custom groups and tasks via physics-smooth pointer drag-and-drop sorting, inspect/edit schedules in the slide-over inspector, and bulk-import items separated by `;` or `；`.
+- **Windows Reminders & Instant Status Toasts:** Set preset or custom date/time notifications backed by a Rust background reminder engine, with clear toast feedback on every state change.
+- **15 Themes & 8 Edge Effects:** Independent Light and Dark theme presets (Paper, Glass, Notion, Claude, Google, Dark OLED, layered cards, and animated shaders) synced to Windows appearance, paired with growing and weather edge effects (leaves, sakura, vines, icicles, ink, rain, snow, fireflies).
+- **Optional Two-Way Notion Sync & Tray Residency:** Pull today's tasks and active multi-day tasks from Notion with offline retry queuing; closing (`×` / `Alt+F4`) hides to the system tray, with bilingual English / Simplified Chinese UI and optional **Start with Windows**.
 
 ## Install & Upgrade
 
