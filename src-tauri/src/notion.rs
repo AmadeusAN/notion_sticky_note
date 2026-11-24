@@ -80,6 +80,8 @@ const NOTION_VERSION: &str = "2022-06-28";
 /// Notion cannot filter by range end, so we bound start-date lookback instead of
 /// pulling every historical row with start ≤ today.
 const DATE_LOOKBACK_DAYS: i64 = 60;
+/// How far ahead to pull scheduled Notion tasks so calendar views show upcoming work.
+const DATE_LOOKAHEAD_DAYS: i64 = 60;
 
 #[derive(Clone)]
 pub struct NotionClient {
@@ -163,7 +165,9 @@ impl NotionClient {
         Self::require_config(config)?;
         let today = chrono::Local::now().date_naive();
         let today_str = today.format("%Y-%m-%d").to_string();
+        let tomorrow_str = (today + chrono::Duration::days(1)).format("%Y-%m-%d").to_string();
         let lookback_str = (today - chrono::Duration::days(DATE_LOOKBACK_DAYS)).format("%Y-%m-%d").to_string();
+        let lookahead_str = (today + chrono::Duration::days(DATE_LOOKAHEAD_DAYS)).format("%Y-%m-%d").to_string();
         let date_prop = if config.date_property.trim().is_empty() { "Date" } else { config.date_property.trim() };
         let done_prop = if config.done_property.trim().is_empty() { "done?" } else { config.done_property.trim() };
         let url = format!("{}/databases/{}/query", self.base_url(), config.database_id.trim());
@@ -173,6 +177,10 @@ impl NotionClient {
                 {"property": done_prop, "checkbox": {"equals": false}},
                 {"property": date_prop, "date": {"on_or_before": today_str}},
                 {"property": date_prop, "date": {"on_or_after": lookback_str}}
+            ]},
+            {"and": [
+                {"property": date_prop, "date": {"on_or_after": tomorrow_str}},
+                {"property": date_prop, "date": {"on_or_before": lookahead_str}}
             ]}
         ]});
         let mut results = Vec::new();
@@ -189,7 +197,7 @@ impl NotionClient {
             let has_more = payload.get("has_more").and_then(Value::as_bool).ok_or_else(protocol_error)?;
             for page in pages {
                 validate_page(page, config)?;
-                if page_date_covers_today(page, config, &today_str) {
+                if page_in_schedule_window(page, config, &today_str, &lookahead_str) {
                     results.push(parse_page(page, config).ok_or_else(protocol_error)?);
                 }
             }
@@ -304,10 +312,17 @@ fn parse_page(page: &Value, config: &NotionConfig) -> Option<Task> {
     );
     let remain = extract_rich_or_number(props, &["remain", "Remain", "剩余", "Remaining"]);
     let date_names = date_property_names(config);
-    let date = extract_date_range(props, &date_names).map(|(start, end)| match end {
-        Some(end) if end != start => format!("{start} → {end}"),
-        _ => start,
-    });
+    let parsed_schedule = extract_date_schedule(props, &date_names);
+    let (start_date, end_date, start_time, end_time) = match parsed_schedule {
+        Some(s) => (Some(s.start_date), s.end_date, s.start_time, s.end_time),
+        None => (None, None, None, None),
+    };
+    let date = crate::models::format_task_date_summary(
+        start_date.as_deref(),
+        end_date.as_deref(),
+        start_time.as_deref(),
+        end_time.as_deref(),
+    );
     let tags = extract_multi_select(props, &["tags", "Tags", "标签"]);
 
     let updated = page
@@ -325,6 +340,12 @@ fn parse_page(page: &Value, config: &NotionConfig) -> Option<Task> {
         progress,
         remain,
         date,
+        start_date,
+        end_date,
+        start_time,
+        end_time,
+        reminder_at: None,
+        reminded_at: None,
         tags,
         updated_time: updated,
         group_id: crate::models::NOTION_GROUP_ID.into(),
@@ -394,8 +415,31 @@ fn extract_rich_or_number(props: &Value, names: &[&str]) -> Option<String> {
     None
 }
 
-/// Returns `(start, end)` truncated to `YYYY-MM-DD`. `end` is `None` for single-day dates.
-fn extract_date_range(props: &Value, names: &[&str]) -> Option<(String, Option<String>)> {
+struct ParsedNotionSchedule {
+    start_date: String,
+    end_date: Option<String>,
+    start_time: Option<String>,
+    end_time: Option<String>,
+}
+
+fn extract_hh_mm(iso: &str) -> Option<String> {
+    let time_part = iso.split('T').nth(1)?;
+    let hh_mm = time_part.get(..5)?;
+    let bytes = hh_mm.as_bytes();
+    if bytes.len() == 5
+        && bytes[0].is_ascii_digit()
+        && bytes[1].is_ascii_digit()
+        && bytes[2] == b':'
+        && bytes[3].is_ascii_digit()
+        && bytes[4].is_ascii_digit()
+    {
+        Some(hh_mm.to_string())
+    } else {
+        None
+    }
+}
+
+fn extract_date_schedule(props: &Value, names: &[&str]) -> Option<ParsedNotionSchedule> {
     for name in names {
         if name.is_empty() {
             continue;
@@ -403,37 +447,59 @@ fn extract_date_range(props: &Value, names: &[&str]) -> Option<(String, Option<S
         let Some(date) = props.get(*name).and_then(|p| p.get("date")) else {
             continue;
         };
-        // Notion may return "2026-07-20" or "2026-07-20T00:00:00.000+08:00"
-        let Some(start) = date.get("start").and_then(|v| v.as_str()) else {
+        let Some(raw_start) = date.get("start").and_then(|v| v.as_str()) else {
             continue;
         };
-        let start = start.chars().take(10).collect::<String>();
-        let end = date
-            .get("end")
-            .and_then(|v| v.as_str())
-            .map(|s| s.chars().take(10).collect::<String>());
-        return Some((start, end));
+        let start_date = raw_start.chars().take(10).collect::<String>();
+        let raw_end = date.get("end").and_then(|v| v.as_str());
+        let end_date = raw_end
+            .map(|s| s.chars().take(10).collect::<String>())
+            .filter(|end| end != &start_date);
+        let start_time = extract_hh_mm(raw_start);
+        let end_time = raw_end.and_then(extract_hh_mm);
+        return Some(ParsedNotionSchedule {
+            start_date,
+            end_date,
+            start_time,
+            end_time,
+        });
     }
     None
+}
+
+/// Returns `(start, end)` truncated to `YYYY-MM-DD`. `end` is `None` for single-day dates.
+#[cfg(test)]
+fn extract_date_range(props: &Value, names: &[&str]) -> Option<(String, Option<String>)> {
+    extract_date_schedule(props, names).map(|s| (s.start_date, s.end_date))
 }
 
 fn date_property_names(config: &NotionConfig) -> [&str; 5] {
     [config.date_property.as_str(), "Date", "date", "日期", "Deadline"]
 }
 
-/// True when today is within `[start, end]` (inclusive). Missing end ⇒ single-day task.
-fn date_covers_today(start: &str, end: Option<&str>, today: &str) -> bool {
+fn date_in_window(start: &str, end: Option<&str>, window_start: &str, window_end: &str) -> bool {
     let end = end.unwrap_or(start);
-    start <= today && today <= end
+    start <= window_end && end >= window_start
 }
 
-fn page_date_covers_today(page: &Value, config: &NotionConfig, today: &str) -> bool {
+/// True when today is within `[start, end]` (inclusive). Missing end ⇒ single-day task.
+#[cfg(test)]
+fn date_covers_today(start: &str, end: Option<&str>, today: &str) -> bool {
+    date_in_window(start, end, today, today)
+}
+
+fn page_in_schedule_window(
+    page: &Value,
+    config: &NotionConfig,
+    window_start: &str,
+    window_end: &str,
+) -> bool {
     let Some(props) = page.get("properties") else {
         return false;
     };
     let names = date_property_names(config);
-    match extract_date_range(props, &names) {
-        Some((start, end)) => date_covers_today(&start, end.as_deref(), today),
+    match extract_date_schedule(props, &names) {
+        Some(s) => date_in_window(&s.start_date, s.end_date.as_deref(), window_start, window_end),
         None => false,
     }
 }
@@ -635,6 +701,32 @@ mod http_tests {
         assert_eq!(filter[1]["and"][1]["date"]["on_or_before"], today.to_string());
         assert_eq!(filter[1]["and"][2]["date"]["on_or_after"], (today - chrono::Duration::days(60)).to_string());
         assert_eq!(tasks[1].date.as_deref(), Some(format!("{} → {today}", today - chrono::Duration::days(60)).as_str()));
+        assert_eq!(tasks[1].start_time.as_deref(), Some("23:30"));
+        assert_eq!(tasks[1].end_time.as_deref(), Some("23:59"));
+    }
+
+    #[tokio::test]
+    async fn date_window_syncs_sixty_days_ahead_with_single_day_times() {
+        let fixture = Fixture::new(|request| {
+            let today = chrono::NaiveDate::parse_from_str(
+                request.body["filter"]["or"][0]["date"]["equals"].as_str().unwrap(), "%Y-%m-%d",
+            ).unwrap();
+            let upcoming = today + chrono::Duration::days(14);
+            let too_far = today + chrono::Duration::days(61);
+            let mut scheduled = page(PAGE, false);
+            scheduled["properties"]["Date"]["date"] = json!({
+                "start": format!("{upcoming}T11:00:00.000+08:00"),
+                "end": format!("{upcoming}T15:00:00.000+08:00")
+            });
+            let mut distant = page("44444444-4444-4444-4444-444444444444", false);
+            distant["properties"]["Date"]["date"] = json!({"start": too_far.to_string(), "end": null});
+            Reply::ok(snapshot(vec![scheduled, distant]))
+        });
+        let tasks = NotionClient::with_base_url(fixture.url()).query_tasks(&config()).await.unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].start_time.as_deref(), Some("11:00"));
+        assert_eq!(tasks[0].end_time.as_deref(), Some("15:00"));
+        assert!(tasks[0].date.as_deref().unwrap().ends_with(" 11:00–15:00"));
     }
 
     #[tokio::test]

@@ -1,12 +1,15 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { StickyNote } from "./components/StickyNote";
+import { WorkspaceShell } from "./components/WorkspaceShell";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { useTaskStore } from "./stores/taskStore";
 import { useSettingsStore } from "./stores/settingsStore";
+import { useModeStore } from "./stores/modeStore";
 import { themes } from "./themes";
 import { fonts, ensureFontLoaded } from "./fonts";
 import { AppearanceFeedback } from "./components/AppearanceFeedback";
 import { ExitSaveDialog } from "./components/ExitSaveDialog";
+import { ToastHost } from "./components/ToastHost";
 import { useDockStore } from "./stores/dockStore";
 import { useFxAmbientPulse } from "./fx/useFxAmbientPulse";
 import { useLanguageStore, useLocale } from "./stores/languageStore";
@@ -39,15 +42,24 @@ function App() {
   const font = fonts[fontId] ?? fonts.hand;
   const dock = useDockStore((s) => s.snapshot);
   const connectDock = useDockStore((s) => s.connectDock);
+  const windowMode = useModeStore((s) => s.mode);
+  const connectWindowMode = useModeStore((s) => s.connectWindowMode);
+  const setWindowMode = useModeStore((s) => s.setMode);
   useFxAmbientPulse(dock.phase, dock.edge, dock.presented, dock.revision);
 
   useEffect(() => {
     const disconnectSync = connectSyncState();
     const disconnectSettings = connectSettings();
     const disconnectDock = connectDock();
+    const disconnectMode = connectWindowMode();
     void refreshTaskView();
-    return () => { disconnectSync(); disconnectSettings(); disconnectDock(); };
-  }, [connectSettings, refreshTaskView, connectSyncState, connectDock, connectionAttempt]);
+    return () => {
+      disconnectSync();
+      disconnectSettings();
+      disconnectDock();
+      disconnectMode();
+    };
+  }, [connectSettings, refreshTaskView, connectSyncState, connectDock, connectWindowMode, connectionAttempt]);
 
   const startSystemThemeListener = useSettingsStore(
     (s) => s.startSystemThemeListener,
@@ -67,6 +79,13 @@ function App() {
       delete document.documentElement.dataset.dockPresented;
     };
   }, [dock.phase, dock.edge, dock.presented]);
+
+  useEffect(() => {
+    document.documentElement.dataset.windowMode = windowMode;
+    return () => {
+      delete document.documentElement.dataset.windowMode;
+    };
+  }, [windowMode]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = themeId;
@@ -122,8 +141,14 @@ function App() {
         </div>}
         {showSettings ? (
           <SettingsPanel onClose={() => { void flushAppearance(); setShowSettings(false); }} />
+        ) : windowMode === "workspace" ? (
+          <WorkspaceShell onOpenSettings={() => setShowSettings(true)} />
         ) : (
-          <StickyNote dock={dock} onOpenSettings={() => setShowSettings(true)} />
+          <StickyNote
+            dock={dock}
+            onOpenSettings={() => setShowSettings(true)}
+            onSwitchToWorkspace={() => void setWindowMode("workspace")}
+          />
         )}
         </div>
         <AppearanceFeedback
@@ -132,6 +157,7 @@ function App() {
           onRetryHydration={() => setConnectionAttempt((attempt) => attempt + 1)}
         />
       </div>
+      <ToastHost />
       <ExitSaveDialog />
     </div>
   );

@@ -1,13 +1,16 @@
 import { useLocale } from "../stores/languageStore";
 import { useEffect, useId, useMemo, useRef, useState, type RefObject } from "react";
-import type { Group } from "../types";
+import type { Group, TaskScheduleInput } from "../types";
 import { splitTaskText } from "../services/taskImport";
+import { validateSchedule } from "../services/taskDate";
+import { ScheduleFields } from "./ScheduleFields";
 import { useModalFocus } from "./useModalFocus";
 
 interface ComposerPayload {
   titles: string[];
   groupId: string | null;
   newGroupName: string | null;
+  schedule?: TaskScheduleInput;
 }
 
 interface Props {
@@ -15,6 +18,7 @@ interface Props {
   pendingGroups?: Readonly<Record<string, string>>;
   defaultGroupId: string | null;
   mode?: "single" | "batch";
+  initialSchedule?: TaskScheduleInput | null;
   onSubmit: (payload: ComposerPayload) => Promise<void>;
   onCancel: () => void;
   fallbackFocusRef?: RefObject<HTMLElement | null>;
@@ -24,6 +28,7 @@ export function Composer({
   groups,
   pendingGroups = {},
   defaultGroupId,
+  initialSchedule = null,
   onSubmit,
   mode = "single",
   onCancel,
@@ -43,6 +48,13 @@ export function Composer({
     return localGroups.length > 0 ? localGroups[0].id : "new";
   });
   const [groupName, setGroupName] = useState("");
+  const [schedule, setSchedule] = useState<TaskScheduleInput>(() => ({
+    startDate: initialSchedule?.startDate ?? null,
+    endDate: initialSchedule?.endDate ?? null,
+    startTime: initialSchedule?.startTime ?? null,
+    endTime: initialSchedule?.endTime ?? null,
+    reminderAt: initialSchedule?.reminderAt ?? null,
+  }));
   const [busy, setBusy] = useState(false);
   const titleRef = useRef<HTMLInputElement>(null);
   const batchRef = useRef<HTMLTextAreaElement>(null);
@@ -76,8 +88,19 @@ export function Composer({
     (titles.length > 0 || (isNew && mode === "single"));
   const [error, setError] = useState<string | null>(null);
 
+  const hasSchedule = Boolean(
+    schedule.startDate || schedule.endDate || schedule.startTime || schedule.endTime || schedule.reminderAt,
+  );
+
   const submit = async () => {
     if (!canSubmit || submitting.current) return;
+    if (mode === "single" && hasSchedule) {
+      const scheduleError = validateSchedule(schedule);
+      if (scheduleError) {
+        setError(l.errorText(scheduleError));
+        return;
+      }
+    }
     submitting.current = true;
     setBusy(true);
     setError(null);
@@ -86,6 +109,7 @@ export function Composer({
         titles,
         groupId: isNew ? null : groupId,
         newGroupName: isNew ? groupName.trim() : null,
+        ...(mode === "single" && hasSchedule ? { schedule } : {}),
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -211,6 +235,10 @@ export function Composer({
               }
             }}
           />
+        )}
+
+        {mode === "single" && (
+          <ScheduleFields value={schedule} onChange={setSchedule} disabled={busy} compact />
         )}
 
         {mode === "batch" && (

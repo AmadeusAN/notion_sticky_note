@@ -16,11 +16,36 @@ export interface Task {
   progress: string | null;
   remain: string | null;
   date: string | null;
+  startDate?: string | null;
+  endDate?: string | null;
+  startTime?: string | null;
+  endTime?: string | null;
+  reminderAt?: number | null;
+  remindedAt?: number | null;
   tags: string[];
   updatedTime: number;
   /** Owning group id; synced Notion rows live in NOTION_GROUP_ID. */
   groupId: string;
   position?: number;
+}
+
+export interface TaskScheduleInput {
+  startDate: string | null;
+  endDate: string | null;
+  startTime: string | null;
+  endTime: string | null;
+  reminderAt: number | null;
+}
+
+export interface TaskUpdateInput {
+  title?: string;
+  groupId?: string;
+  updateSchedule?: boolean;
+  startDate?: string | null;
+  endDate?: string | null;
+  startTime?: string | null;
+  endTime?: string | null;
+  reminderAt?: number | null;
 }
 
 export interface TaskView {
@@ -29,6 +54,28 @@ export interface TaskView {
 }
 
 export type GroupKind = "notion" | "local" | "archive";
+export type WindowMode = "workspace" | "sticky";
+export type CalendarFocusStyle = "smooth" | "mosaic" | "off";
+export type GallerySource = "local" | "wallhaven" | "pinterest" | "unsplash";
+
+export interface GalleryFeedConfig {
+  source: GallerySource;
+  wallhavenQuery: string;
+  wallhavenTags: string[];
+  pinterestBoardUrl: string;
+  unsplashQuery: string;
+  unsplashAccessKey: string;
+  proxyUrl: string;
+}
+
+export interface RemoteGalleryItem {
+  id: string;
+  title: string;
+  imageUrl: string;
+  sourceUrl: string | null;
+  author: string | null;
+  provider: string;
+}
 
 export interface Group {
   id: string;

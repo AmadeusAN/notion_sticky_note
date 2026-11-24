@@ -1,9 +1,10 @@
 use crate::models::{
-    normalize_notion_id, AppearanceSettings, AppSettings, Group, NotionConfig, NotionWriteMapping, PendingOp,
-    SaveNotionConfigResult, Task, TaskImportResult, TaskView, ARCHIVE_GROUP_ID, NOTION_GROUP_ID,
+    format_task_date_summary, normalize_notion_id, AppearanceSettings, AppSettings, Group, NotionConfig,
+    NotionWriteMapping, PendingOp, SaveNotionConfigResult, Task, TaskImportResult, TaskScheduleInput,
+    TaskUpdateInput, TaskView, ARCHIVE_GROUP_ID, NOTION_GROUP_ID,
 };
 use crate::monitors::{self, MonitorLayout};
-use crate::window_state::{DockEdge, DockPhase, WindowRestore, WindowStateV2};
+use crate::window_state::{DockEdge, DockPhase, WindowMode, WindowRestore, WindowStateV2, WorkspaceGeometry};
 use std::collections::{HashMap, HashSet};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::PathBuf;
@@ -27,6 +28,15 @@ struct LegacyEdgeDock {
     restored_y: i32,
     restored_width: u32,
     restored_height: u32,
+}
+
+struct NormalizedSchedule {
+    start_date: Option<String>,
+    end_date: Option<String>,
+    start_time: Option<String>,
+    end_time: Option<String>,
+    reminder_at: Option<i64>,
+    date: Option<String>,
 }
 
 pub struct Database {
@@ -59,10 +69,10 @@ impl Database {
         let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
         let version: u32 = tx.query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(|e| e.to_string())?;
-        if version == 2 {
+        if version == 3 {
             return Ok(());
         }
-        if version > 2 {
+        if version > 3 {
             return Err(crate::language::text("This database was created by a newer version of Sticky Note.", "数据库版本高于当前应用支持的版本").into());
         }
         if version == 0 {
@@ -79,7 +89,13 @@ impl Database {
                     updated_time INTEGER NOT NULL,
                     group_id TEXT NOT NULL DEFAULT 'notion',
                     archive_source_group_id TEXT,
-                    position INTEGER NOT NULL DEFAULT 0
+                    position INTEGER NOT NULL DEFAULT 0,
+                    start_date TEXT,
+                    end_date TEXT,
+                    start_time TEXT,
+                    end_time TEXT,
+                    reminder_at INTEGER,
+                    reminded_at INTEGER
                  );
                  CREATE TABLE IF NOT EXISTS settings (
                     key TEXT PRIMARY KEY,
@@ -158,7 +174,64 @@ impl Database {
             tx.execute_batch("PRAGMA user_version = 2;")
                 .map_err(|e| e.to_string())?;
         }
+        if version < 3 {
+            for (column, definition) in [
+                ("start_date", "start_date TEXT"),
+                ("end_date", "end_date TEXT"),
+                ("start_time", "start_time TEXT"),
+                ("end_time", "end_time TEXT"),
+                ("reminder_at", "reminder_at INTEGER"),
+                ("reminded_at", "reminded_at INTEGER"),
+            ] {
+                let exists: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM pragma_table_info('tasks') WHERE name = ?1)",
+                    params![column], |row| row.get(0),
+                ).map_err(|e| e.to_string())?;
+                if !exists {
+                    tx.execute_batch(&format!("ALTER TABLE tasks ADD COLUMN {definition}"))
+                        .map_err(|e| e.to_string())?;
+                }
+            }
+            Self::backfill_task_dates_on(&tx)?;
+            tx.execute_batch("PRAGMA user_version = 3;")
+                .map_err(|e| e.to_string())?;
+        }
         tx.commit().map_err(|e| e.to_string())
+    }
+
+    fn parse_date_prefix(raw: &str) -> Option<String> {
+        let prefix = raw.trim().get(..10)?;
+        chrono::NaiveDate::parse_from_str(prefix, "%Y-%m-%d").ok().map(|_| prefix.to_string())
+    }
+
+    fn backfill_task_dates_on(conn: &Connection) -> Result<(), String> {
+        let rows = {
+            let mut stmt = conn
+                .prepare("SELECT id, date FROM tasks WHERE date IS NOT NULL AND start_date IS NULL")
+                .map_err(|e| e.to_string())?;
+            let mapped = stmt
+                .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+                .map_err(|e| e.to_string())?;
+            mapped.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?
+        };
+        for (id, raw) in rows {
+            let (start_date, end_date) = match raw.split_once('→') {
+                Some((left, right)) => {
+                    let s = Self::parse_date_prefix(left);
+                    let e = Self::parse_date_prefix(right).filter(|end| s.as_deref() != Some(end.as_str()));
+                    (s, e)
+                }
+                None => (Self::parse_date_prefix(&raw), None),
+            };
+            if start_date.is_some() {
+                conn.execute(
+                    "UPDATE tasks SET start_date = ?1, end_date = ?2 WHERE id = ?3",
+                    params![start_date, end_date, id],
+                )
+                .map_err(|e| e.to_string())?;
+            }
+        }
+        Ok(())
     }
 
     fn migrate_pending(conn: &Connection) -> Result<(), String> {
@@ -464,6 +537,49 @@ impl Database {
         Ok(true)
     }
 
+    pub fn load_window_mode(&self) -> Result<WindowMode, String> {
+        match self.get_setting("window_mode")?.as_deref() {
+            Some("sticky") => Ok(WindowMode::Sticky),
+            Some("workspace") | None => Ok(WindowMode::Workspace),
+            Some(_) => Ok(WindowMode::Workspace),
+        }
+    }
+
+    pub fn save_window_mode(&self, mode: WindowMode) -> Result<(), String> {
+        let value = match mode {
+            WindowMode::Workspace => "workspace",
+            WindowMode::Sticky => "sticky",
+        };
+        self.set_setting("window_mode", value)
+    }
+
+    pub fn load_workspace_geometry(&self) -> Result<Option<WorkspaceGeometry>, String> {
+        self.get_setting("workspace_geometry")?
+            .map(|raw| {
+                let geom: WorkspaceGeometry = serde_json::from_str(&raw).map_err(|_| {
+                    crate::language::text(
+                        "The saved workspace geometry is damaged.",
+                        "已保存的主面板窗口几何损坏",
+                    )
+                    .to_string()
+                })?;
+                geom.validate()?;
+                Ok(geom)
+            })
+            .transpose()
+    }
+
+    pub fn save_workspace_geometry(&self, geom: &WorkspaceGeometry) -> Result<bool, String> {
+        geom.validate()?;
+        let raw = serde_json::to_string(geom).map_err(|e| e.to_string())?;
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        if Self::setting_on(&conn, "workspace_geometry")?.as_deref() == Some(raw.as_str()) {
+            return Ok(false);
+        }
+        Self::put_setting_on(&conn, "workspace_geometry", &raw)?;
+        Ok(true)
+    }
+
     pub fn load_window_state(&self) -> Result<Option<WindowStateV2>, String> {
         self.get_setting("window_state_v2")?.map(|raw| {
             let state: WindowStateV2 = serde_json::from_str(&raw)
@@ -575,7 +691,8 @@ impl Database {
     fn tasks_on(conn: &Connection, notion_only: bool) -> Result<Vec<Task>, String> {
         let mut stmt = conn
             .prepare(
-                "SELECT id, notion_id, title, completed, progress, remain, date, tags, updated_time, group_id, position
+                "SELECT id, notion_id, title, completed, progress, remain, date, tags, updated_time, group_id, position,
+                        start_date, end_date, start_time, end_time, reminder_at, reminded_at
                  FROM tasks WHERE (?1 = 0 OR group_id = 'notion')
                  ORDER BY completed ASC, CASE WHEN position > 0 THEN 0 ELSE 1 END ASC, position ASC, updated_time DESC, rowid ASC",
             )
@@ -600,8 +717,9 @@ impl Database {
     ) -> Result<(), String> {
         let tags = serde_json::to_string(&task.tags).map_err(|e| e.to_string())?;
         let changed = conn.execute(
-            "INSERT INTO tasks(id, notion_id, title, completed, progress, remain, date, tags, updated_time, group_id)
-             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            "INSERT INTO tasks(id, notion_id, title, completed, progress, remain, date, tags, updated_time, group_id,
+                               start_date, end_date, start_time, end_time, reminder_at, reminded_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
              ON CONFLICT(id) DO UPDATE SET
                notion_id=excluded.notion_id,
                title=excluded.title,
@@ -611,7 +729,11 @@ impl Database {
                date=excluded.date,
                tags=excluded.tags,
                updated_time=excluded.updated_time,
-               group_id=excluded.group_id
+               group_id=excluded.group_id,
+               start_date=excluded.start_date,
+               end_date=excluded.end_date,
+               start_time=excluded.start_time,
+               end_time=excluded.end_time
              WHERE tasks.group_id = excluded.group_id",
             params![
                 id,
@@ -623,7 +745,13 @@ impl Database {
                 task.date,
                 tags,
                 task.updated_time,
-                task.group_id
+                task.group_id,
+                task.start_date,
+                task.end_date,
+                task.start_time,
+                task.end_time,
+                task.reminder_at,
+                task.reminded_at,
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -689,6 +817,10 @@ impl Database {
                     && saved.progress == remote.progress
                     && saved.remain == remote.remain
                     && saved.date == remote.date
+                    && saved.start_date == remote.start_date
+                    && saved.end_date == remote.end_date
+                    && saved.start_time == remote.start_time
+                    && saved.end_time == remote.end_time
                     && saved.tags == remote.tags
                     && saved.updated_time == remote.updated_time
             );
@@ -718,7 +850,8 @@ impl Database {
 
     fn task_on(conn: &Connection, id: &str) -> Result<Option<Task>, String> {
         conn.query_row(
-            "SELECT id, notion_id, title, completed, progress, remain, date, tags, updated_time, group_id, position
+            "SELECT id, notion_id, title, completed, progress, remain, date, tags, updated_time, group_id, position,
+                    start_date, end_date, start_time, end_time, reminder_at, reminded_at
              FROM tasks WHERE id = ?1",
             params![id],
             Self::task_from_row,
@@ -741,6 +874,12 @@ impl Database {
             updated_time: row.get(8)?,
             group_id: row.get(9)?,
             position: row.get(10)?,
+            start_date: row.get(11)?,
+            end_date: row.get(12)?,
+            start_time: row.get(13)?,
+            end_time: row.get(14)?,
+            reminder_at: row.get(15)?,
+            reminded_at: row.get(16)?,
         })
     }
 
@@ -1051,9 +1190,20 @@ impl Database {
         group_id: Option<&str>,
         new_group_name: Option<&str>,
     ) -> Result<TaskImportResult, String> {
+        self.import_local_tasks_with_schedule(titles, group_id, new_group_name, None)
+    }
+
+    pub fn import_local_tasks_with_schedule(
+        &self,
+        titles: Vec<String>,
+        group_id: Option<&str>,
+        new_group_name: Option<&str>,
+        schedule: Option<TaskScheduleInput>,
+    ) -> Result<TaskImportResult, String> {
         if titles.is_empty() || titles.iter().any(|title| title.trim().is_empty()) {
             return Err(crate::language::text("Provide at least one task. Task titles cannot be empty.", "请至少提供一条非空任务，任务内容不能为空").into());
         }
+        let schedule = Self::normalize_schedule(schedule.unwrap_or_default())?;
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
         let group = match (group_id, new_group_name) {
@@ -1093,8 +1243,9 @@ impl Database {
         let mut tasks = Vec::with_capacity(titles.len());
         {
             let mut insert = tx.prepare(
-                "INSERT INTO tasks(id, notion_id, title, completed, progress, remain, date, tags, updated_time, group_id, position)
-                 VALUES(?1, NULL, ?2, 0, NULL, NULL, NULL, '[]', ?3, ?4, ?5)",
+                "INSERT INTO tasks(id, notion_id, title, completed, progress, remain, date, tags, updated_time, group_id, position,
+                                   start_date, end_date, start_time, end_time, reminder_at, reminded_at)
+                 VALUES(?1, NULL, ?2, 0, NULL, NULL, ?3, '[]', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL)",
             ).map_err(|e| e.to_string())?;
             for (index, mut title) in titles.into_iter().enumerate() {
                 // Reuse the title buffers received over IPC instead of copying the batch.
@@ -1104,7 +1255,19 @@ impl Database {
                 title.drain(..start);
                 let id = format!("t-{batch}-{index}");
                 let position = if max_pos > 0 { max_pos + index as i64 + 1 } else { 0 };
-                insert.execute(params![id, title, now, group.id, position]).map_err(|e| e.to_string())?;
+                insert.execute(params![
+                    id,
+                    title,
+                    schedule.date,
+                    now,
+                    group.id,
+                    position,
+                    schedule.start_date,
+                    schedule.end_date,
+                    schedule.start_time,
+                    schedule.end_time,
+                    schedule.reminder_at,
+                ]).map_err(|e| e.to_string())?;
                 tasks.push(Task {
                     id,
                     notion_id: None,
@@ -1112,7 +1275,13 @@ impl Database {
                     completed: false,
                     progress: None,
                     remain: None,
-                    date: None,
+                    date: schedule.date.clone(),
+                    start_date: schedule.start_date.clone(),
+                    end_date: schedule.end_date.clone(),
+                    start_time: schedule.start_time.clone(),
+                    end_time: schedule.end_time.clone(),
+                    reminder_at: schedule.reminder_at,
+                    reminded_at: None,
                     tags: Vec::new(),
                     updated_time: now,
                     group_id: group.id.clone(),
@@ -1122,6 +1291,231 @@ impl Database {
         }
         tx.commit().map_err(|e| e.to_string())?;
         Ok(TaskImportResult { group, tasks })
+    }
+
+    fn validate_iso_date(raw: Option<String>) -> Result<Option<String>, String> {
+        let Some(trimmed) = raw.map(|v| v.trim().to_string()).filter(|v| !v.is_empty()) else {
+            return Ok(None);
+        };
+        chrono::NaiveDate::parse_from_str(&trimmed, "%Y-%m-%d")
+            .map(|d| Some(d.format("%Y-%m-%d").to_string()))
+            .map_err(|_| crate::language::text("Invalid date format (expected YYYY-MM-DD).", "日期格式无效，应为 YYYY-MM-DD").into())
+    }
+
+    fn validate_hh_mm(raw: Option<String>) -> Result<Option<String>, String> {
+        let Some(trimmed) = raw.map(|v| v.trim().to_string()).filter(|v| !v.is_empty()) else {
+            return Ok(None);
+        };
+        chrono::NaiveTime::parse_from_str(&trimmed, "%H:%M")
+            .map(|t| Some(t.format("%H:%M").to_string()))
+            .map_err(|_| crate::language::text("Invalid time format (expected HH:MM).", "时间格式无效，应为 HH:MM").into())
+    }
+
+    fn normalize_schedule(input: TaskScheduleInput) -> Result<NormalizedSchedule, String> {
+        let start_date = Self::validate_iso_date(input.start_date)?;
+        let mut end_date = Self::validate_iso_date(input.end_date)?;
+        let start_time = Self::validate_hh_mm(input.start_time)?;
+        let mut end_time = Self::validate_hh_mm(input.end_time)?;
+
+        if start_date.is_none() {
+            if end_date.is_some() {
+                return Err(crate::language::text("Please select a start date first.", "请先选择开始日期").into());
+            }
+            if start_time.is_some() || end_time.is_some() {
+                return Err(crate::language::text("Please set a date before setting a time.", "请先设置日期再设置具体时间").into());
+            }
+        }
+        if let (Some(start), Some(end)) = (&start_date, &end_date) {
+            if end < start {
+                return Err(crate::language::text("End date cannot be earlier than start date.", "结束日期不能早于开始日期").into());
+            }
+            if end == start {
+                end_date = None;
+            }
+        }
+        if start_time.is_none() {
+            end_time = None;
+        } else if end_date.is_none() {
+            if let (Some(st), Some(et)) = (&start_time, &end_time) {
+                if et <= st {
+                    return Err(crate::language::text("End time must be later than start time.", "结束时间必须晚于开始时间").into());
+                }
+            }
+        }
+        let date = format_task_date_summary(
+            start_date.as_deref(),
+            end_date.as_deref(),
+            start_time.as_deref(),
+            end_time.as_deref(),
+        );
+        Ok(NormalizedSchedule {
+            start_date,
+            end_date,
+            start_time,
+            end_time,
+            reminder_at: input.reminder_at,
+            date,
+        })
+    }
+
+    /// Update a local task's title and/or schedule/reminder fields.
+    pub fn update_local_task(&self, id: &str, update: TaskUpdateInput) -> Result<Task, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        let existing = Self::task_on(&tx, id)?
+            .ok_or_else(|| crate::language::text("The task no longer exists.", "任务不存在").to_string())?;
+        if existing.notion_id.is_some() || existing.group_id == NOTION_GROUP_ID {
+            return Err(crate::language::text("Synced Notion tasks are edited in Notion.", "来自 Notion 的同步任务请在 Notion 中编辑").into());
+        }
+        if existing.group_id == ARCHIVE_GROUP_ID {
+            return Err(crate::language::text("Restore the archived task before editing it.", "请先取消归档再编辑任务").into());
+        }
+
+        let next_title = match update.title {
+            Some(title) => {
+                let trimmed = title.trim();
+                if trimmed.is_empty() {
+                    return Err(crate::language::text("Task title cannot be empty.", "任务标题不能为空").into());
+                }
+                trimmed.to_string()
+            }
+            None => existing.title.clone(),
+        };
+
+        let (start_date, end_date, start_time, end_time, date, reminder_at, reminded_at) = if update.update_schedule {
+            let normalized = Self::normalize_schedule(TaskScheduleInput {
+                start_date: update.start_date,
+                end_date: update.end_date,
+                start_time: update.start_time,
+                end_time: update.end_time,
+                reminder_at: update.reminder_at,
+            })?;
+            let reminded = if normalized.reminder_at == existing.reminder_at {
+                existing.reminded_at
+            } else {
+                None
+            };
+            (
+                normalized.start_date,
+                normalized.end_date,
+                normalized.start_time,
+                normalized.end_time,
+                normalized.date,
+                normalized.reminder_at,
+                reminded,
+            )
+        } else {
+            (
+                existing.start_date.clone(),
+                existing.end_date.clone(),
+                existing.start_time.clone(),
+                existing.end_time.clone(),
+                existing.date.clone(),
+                existing.reminder_at,
+                existing.reminded_at,
+            )
+        };
+
+        let next_group_id = match update.group_id {
+            Some(ref target_id) if target_id != &existing.group_id => {
+                let kind: Option<String> = tx
+                    .query_row(
+                        "SELECT kind FROM groups WHERE id = ?1",
+                        params![target_id],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .map_err(|e| e.to_string())?;
+                match kind.as_deref() {
+                    Some("local") => target_id.clone(),
+                    Some(_) => {
+                        return Err(crate::language::text(
+                            "Tasks can only be moved to a custom local group.",
+                            "仅支持将任务移动到自定义本地分组",
+                        )
+                        .into())
+                    }
+                    None => {
+                        return Err(crate::language::text(
+                            "The target group no longer exists.",
+                            "目标分组不存在",
+                        )
+                        .into())
+                    }
+                }
+            }
+            _ => existing.group_id.clone(),
+        };
+        let next_position = if next_group_id != existing.group_id {
+            let max_pos: i64 = tx
+                .query_row(
+                    "SELECT COALESCE(MAX(position), 0) FROM tasks WHERE group_id = ?1",
+                    params![&next_group_id],
+                    |row| row.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            if max_pos > 0 { max_pos + 1 } else { 0 }
+        } else {
+            existing.position
+        };
+
+        let now = chrono::Utc::now().timestamp_millis();
+        tx.execute(
+            "UPDATE tasks
+             SET title = ?1, group_id = ?2, position = ?3, date = ?4, start_date = ?5, end_date = ?6,
+                 start_time = ?7, end_time = ?8, reminder_at = ?9, reminded_at = ?10, updated_time = ?11
+             WHERE id = ?12",
+            params![
+                next_title,
+                next_group_id,
+                next_position,
+                date,
+                start_date,
+                end_date,
+                start_time,
+                end_time,
+                reminder_at,
+                reminded_at,
+                now,
+                id
+            ],
+        ).map_err(|e| e.to_string())?;
+        let updated = Self::task_on(&tx, id)?
+            .ok_or_else(|| crate::language::text("The task no longer exists.", "任务不存在").to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(updated)
+    }
+
+    pub fn due_reminders(&self, now_ms: i64) -> Result<Vec<Task>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn.prepare(
+            "SELECT id, notion_id, title, completed, progress, remain, date, tags, updated_time, group_id, position,
+                    start_date, end_date, start_time, end_time, reminder_at, reminded_at
+             FROM tasks
+             WHERE completed = 0
+               AND group_id != ?1
+               AND reminder_at IS NOT NULL
+               AND reminder_at <= ?2
+               AND reminded_at IS NULL
+             ORDER BY reminder_at ASC, rowid ASC",
+        ).map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![ARCHIVE_GROUP_ID, now_ms], Self::task_from_row)
+            .map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| e.to_string())?);
+        }
+        Ok(out)
+    }
+
+    pub fn mark_reminded(&self, id: &str, fired_at: i64) -> Result<bool, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let changed = conn.execute(
+            "UPDATE tasks SET reminded_at = ?1 WHERE id = ?2 AND reminded_at IS NULL",
+            params![fired_at, id],
+        ).map_err(|e| e.to_string())?;
+        Ok(changed != 0)
     }
 
     /// Delete a local task. Notion-owned rows must be removed in Notion itself.
@@ -1302,6 +1696,12 @@ mod tests {
             progress: None,
             remain: None,
             date: None,
+            start_date: None,
+            end_date: None,
+            start_time: None,
+            end_time: None,
+            reminder_at: None,
+            reminded_at: None,
             tags: vec![],
             updated_time: 1,
             group_id: NOTION_GROUP_ID.into(),
@@ -1497,6 +1897,12 @@ mod tests {
             progress: None,
             remain: None,
             date: None,
+            start_date: None,
+            end_date: None,
+            start_time: None,
+            end_time: None,
+            reminder_at: None,
+            reminded_at: None,
             tags: vec![],
             updated_time: 1,
             group_id: NOTION_GROUP_ID.into(),
@@ -1971,7 +2377,7 @@ mod tests {
         assert_eq!(db.toggle_task("legitimate-done").unwrap().group_id, "user-group");
         assert_eq!(db.get_task("remote").unwrap().unwrap().group_id, NOTION_GROUP_ID);
         let conn = db.conn.lock().unwrap();
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0)).unwrap(), 2);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0)).unwrap(), 3);
         assert_eq!(conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE name = 'sync_log'", [],
             |row| row.get::<_, i64>(0)).unwrap(), 0);
     }
@@ -2435,7 +2841,7 @@ mod tests {
 
         assert_eq!(
             db.conn.lock().unwrap().query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0)).unwrap(),
-            2
+            3
         );
         let view = db.task_view().unwrap();
         let group_ids: Vec<_> = view.groups.iter().map(|g| g.id.as_str()).collect();
@@ -2456,8 +2862,156 @@ mod tests {
         let reordered_group_ids: Vec<_> = reordered_groups.iter().map(|g| g.id.as_str()).collect();
         assert_eq!(reordered_group_ids, vec![NOTION_GROUP_ID, "g2", "g1", ARCHIVE_GROUP_ID]);
 
-        // Newer schema versions (e.g. v3) must be rejected cleanly.
-        db.conn.lock().unwrap().execute_batch("PRAGMA user_version = 3;").unwrap();
+        // Newer schema versions (e.g. v4) must be rejected cleanly.
+        db.conn.lock().unwrap().execute_batch("PRAGMA user_version = 4;").unwrap();
         assert!(db.migrate().is_err());
+    }
+
+    #[test]
+    fn migrates_v2_database_backfilling_task_dates_and_supports_updates_and_reminders() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE tasks (
+                id TEXT PRIMARY KEY,
+                notion_id TEXT,
+                title TEXT NOT NULL,
+                completed INTEGER NOT NULL DEFAULT 0,
+                progress TEXT,
+                remain TEXT,
+                date TEXT,
+                tags TEXT NOT NULL DEFAULT '[]',
+                updated_time INTEGER NOT NULL,
+                group_id TEXT NOT NULL DEFAULT 'notion',
+                archive_source_group_id TEXT,
+                position INTEGER NOT NULL DEFAULT 0
+             );
+             CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE groups (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                kind TEXT NOT NULL DEFAULT 'local',
+                position INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL
+             );
+             CREATE TABLE pending_ops (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                revision INTEGER NOT NULL,
+                task_id TEXT NOT NULL,
+                completed INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                database_id TEXT,
+                page_id TEXT,
+                mapping TEXT,
+                source_verified INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(database_id, page_id)
+             );
+             INSERT INTO groups(id, name, kind, position, created_at) VALUES
+                ('notion', '来自 Notion', 'notion', 0, 100),
+                ('local', 'Plan', 'local', 1, 101),
+                ('archive', 'Archive', 'archive', 0, 102);
+             INSERT INTO tasks(id, notion_id, title, completed, date, updated_time, group_id, position) VALUES
+                ('single', NULL, 'Single day', 0, '2026-11-24', 200, 'local', 1),
+                ('span', NULL, 'Multi day', 0, '2026-11-24 → 2026-11-27', 201, 'local', 2);
+             PRAGMA user_version = 2;",
+        ).unwrap();
+        let db = Database { conn: Mutex::new(conn) };
+        db.migrate().unwrap();
+
+        assert_eq!(
+            db.conn.lock().unwrap().query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0)).unwrap(),
+            3
+        );
+        let single = db.get_task("single").unwrap().unwrap();
+        assert_eq!(single.start_date.as_deref(), Some("2026-11-24"));
+        assert_eq!(single.end_date, None);
+        let span = db.get_task("span").unwrap().unwrap();
+        assert_eq!(span.start_date.as_deref(), Some("2026-11-24"));
+        assert_eq!(span.end_date.as_deref(), Some("2026-11-27"));
+
+        // Invalid range is rejected cleanly.
+        assert!(db.update_local_task("single", TaskUpdateInput {
+            update_schedule: true,
+            start_date: Some("2026-11-26".into()),
+            end_date: Some("2026-11-24".into()),
+            ..Default::default()
+        }).is_err());
+
+        // Set timed schedule + due reminder, then mark reminded and re-arm.
+        let updated = db.update_local_task("single", TaskUpdateInput {
+            title: Some("Single day updated".into()),
+            group_id: None,
+            update_schedule: true,
+            start_date: Some("2026-11-24".into()),
+            end_date: None,
+            start_time: Some("11:00".into()),
+            end_time: Some("15:00".into()),
+            reminder_at: Some(1_000),
+        }).unwrap();
+        assert_eq!(updated.date.as_deref(), Some("2026-11-24 11:00–15:00"));
+        assert_eq!(db.due_reminders(1_500).unwrap().len(), 1);
+        assert!(db.mark_reminded("single", 1_500).unwrap());
+        assert!(!db.mark_reminded("single", 1_600).unwrap());
+        assert!(db.due_reminders(2_000).unwrap().is_empty());
+
+        // Updating reminder timestamp clears reminded_at so it fires again at the new time.
+        let rearmed = db.update_local_task("single", TaskUpdateInput {
+            update_schedule: true,
+            start_date: Some("2026-11-24".into()),
+            start_time: Some("11:00".into()),
+            end_time: Some("15:00".into()),
+            reminder_at: Some(3_000),
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(rearmed.reminded_at, None);
+        assert_eq!(db.due_reminders(3_000).unwrap().len(), 1);
+
+        // Completed tasks must not fire reminders.
+        db.toggle_task("single").unwrap();
+        assert!(db.due_reminders(4_000).unwrap().is_empty());
+
+        // Cross-group move succeeds between local groups and rejects fixed groups.
+        let second_group = db.create_group("Second").unwrap();
+        assert!(db.update_local_task("span", TaskUpdateInput {
+            group_id: Some(NOTION_GROUP_ID.into()),
+            ..Default::default()
+        }).is_err());
+        let moved = db.update_local_task("span", TaskUpdateInput {
+            group_id: Some(second_group.id.clone()),
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(moved.group_id, second_group.id);
+    }
+
+    #[test]
+    fn window_mode_defaults_to_workspace_and_workspace_geometry_roundtrips() {
+        let db = test_db();
+        assert_eq!(db.load_window_mode().unwrap(), WindowMode::Workspace);
+        db.save_window_mode(WindowMode::Sticky).unwrap();
+        assert_eq!(db.load_window_mode().unwrap(), WindowMode::Sticky);
+
+        assert!(db.load_workspace_geometry().unwrap().is_none());
+        let invalid = WorkspaceGeometry {
+            x: 0,
+            y: 0,
+            width: 300.0,
+            height: 200.0,
+            maximized: false,
+            monitor_id: None,
+            saved_scale: 1.0,
+        };
+        assert!(db.save_workspace_geometry(&invalid).is_err());
+
+        let valid = WorkspaceGeometry {
+            x: 120,
+            y: 80,
+            width: 1160.0,
+            height: 760.0,
+            maximized: true,
+            monitor_id: Some("DISPLAY1".into()),
+            saved_scale: 1.25,
+        };
+        assert!(db.save_workspace_geometry(&valid).unwrap());
+        assert!(!db.save_workspace_geometry(&valid).unwrap());
+        assert_eq!(db.load_workspace_geometry().unwrap(), Some(valid));
     }
 }

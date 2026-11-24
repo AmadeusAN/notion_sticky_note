@@ -63,8 +63,7 @@ export const useLanguageStore = create<LanguageStore>((set, get) => ({
   },
 }));
 
-export function useLocale() {
-  const locale = useLanguageStore((state) => state.effective);
+function makeLocaleObject(locale: "zh-CN" | "en") {
   return {
     locale,
     t: (key: MessageKey, params?: MessageParams) => translate(locale, key, params),
@@ -72,4 +71,14 @@ export function useLocale() {
     errorText: (value: unknown) => localizeError(locale, value),
     number: (value: number) => numberFormatters[locale].format(value),
   };
+}
+
+const localeObjects = {
+  "zh-CN": makeLocaleObject("zh-CN"),
+  en: makeLocaleObject("en"),
+} as const;
+
+export function useLocale() {
+  const locale = useLanguageStore((state) => state.effective);
+  return localeObjects[locale];
 }

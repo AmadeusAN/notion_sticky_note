@@ -10,6 +10,18 @@ pub struct Task {
     pub progress: Option<String>,
     pub remain: Option<String>,
     pub date: Option<String>,
+    #[serde(default)]
+    pub start_date: Option<String>,
+    #[serde(default)]
+    pub end_date: Option<String>,
+    #[serde(default)]
+    pub start_time: Option<String>,
+    #[serde(default)]
+    pub end_time: Option<String>,
+    #[serde(default)]
+    pub reminder_at: Option<i64>,
+    #[serde(default)]
+    pub reminded_at: Option<i64>,
     pub tags: Vec<String>,
     pub updated_time: i64,
     /// Owning group id. Synced Notion rows live in the pinned `notion` group.
@@ -17,6 +29,54 @@ pub struct Task {
     pub group_id: String,
     #[serde(default)]
     pub position: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskScheduleInput {
+    pub start_date: Option<String>,
+    pub end_date: Option<String>,
+    pub start_time: Option<String>,
+    pub end_time: Option<String>,
+    pub reminder_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskUpdateInput {
+    pub title: Option<String>,
+    pub group_id: Option<String>,
+    #[serde(default)]
+    pub update_schedule: bool,
+    pub start_date: Option<String>,
+    pub end_date: Option<String>,
+    pub start_time: Option<String>,
+    pub end_time: Option<String>,
+    pub reminder_at: Option<i64>,
+}
+
+pub fn format_task_date_summary(
+    start_date: Option<&str>,
+    end_date: Option<&str>,
+    start_time: Option<&str>,
+    end_time: Option<&str>,
+) -> Option<String> {
+    let start = start_date?.trim();
+    if start.is_empty() {
+        return None;
+    }
+    let end = end_date.map(str::trim).filter(|value| !value.is_empty() && *value != start);
+    if let Some(end) = end {
+        return Some(format!("{start} → {end}"));
+    }
+    match (
+        start_time.map(str::trim).filter(|value| !value.is_empty()),
+        end_time.map(str::trim).filter(|value| !value.is_empty()),
+    ) {
+        (Some(st), Some(et)) => Some(format!("{start} {st}–{et}")),
+        (Some(st), None) => Some(format!("{start} {st}")),
+        _ => Some(start.to_string()),
+    }
 }
 
 /// Pinned group id that receives every row synced from Notion.
@@ -386,6 +446,12 @@ pub fn mock_tasks() -> Vec<Task> {
             progress: Some("30%".into()),
             remain: Some("2d".into()),
             date: Some("2026-07-22".into()),
+            start_date: Some("2026-07-22".into()),
+            end_date: None,
+            start_time: None,
+            end_time: None,
+            reminder_at: None,
+            reminded_at: None,
             tags: vec!["research".into()],
             updated_time: now,
             group_id: NOTION_GROUP_ID.into(),
@@ -399,6 +465,12 @@ pub fn mock_tasks() -> Vec<Task> {
             progress: Some("100%".into()),
             remain: Some("0d".into()),
             date: Some("2026-07-18".into()),
+            start_date: Some("2026-07-18".into()),
+            end_date: None,
+            start_time: None,
+            end_time: None,
+            reminder_at: None,
+            reminded_at: None,
             tags: vec!["setup".into()],
             updated_time: now,
             group_id: NOTION_GROUP_ID.into(),
@@ -412,6 +484,12 @@ pub fn mock_tasks() -> Vec<Task> {
             progress: Some("60%".into()),
             remain: Some("1d".into()),
             date: None,
+            start_date: None,
+            end_date: None,
+            start_time: None,
+            end_time: None,
+            reminder_at: None,
+            reminded_at: None,
             tags: vec!["ui".into()],
             updated_time: now,
             group_id: NOTION_GROUP_ID.into(),

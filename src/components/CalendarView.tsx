@@ -1,0 +1,1271 @@
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type DragEvent as ReactDragEvent } from "react";
+import { useLocale } from "../stores/languageStore";
+import { useModeStore } from "../stores/modeStore";
+import { ARCHIVE_GROUP_ID, NOTION_GROUP_ID, type Task, type TaskScheduleInput, type TaskUpdateInput } from "../types";
+import { todayIso } from "../services/taskDate";
+import {
+  computeCellFocusScore,
+  computeFocusTrackWeights,
+  computeRoiFramePct,
+  computeSmoothLensState,
+  computeTrackOffsetsPct,
+} from "../services/calendarFocus";
+import {
+  addDays,
+  applyDaySpanResizePreview,
+  clampResizeEndDate,
+  diffDays,
+  getMonthGridDays,
+  getTaskSpan,
+  getWeekDays,
+  layoutMonthWeekBars,
+  layoutTimedDayEvents,
+  minutesToHHMM,
+  parseIsoDate,
+  parseTimeToMinutes,
+  snapMinutes,
+  toIsoDate,
+  type TaskSpan,
+} from "../services/calendarLayout";
+
+export type CalendarMode = "month" | "week" | "day";
+
+interface Props {
+  tasks: Task[];
+  selectedTaskId: string | null;
+  externalFocusDayIso?: string | null;
+  onSelectTask: (task: Task) => void;
+  onToggleTask: (id: string) => Promise<void>;
+  onRescheduleTask: (id: string, update: TaskUpdateInput) => Promise<unknown>;
+  onCreateAtSchedule: (schedule: TaskScheduleInput) => void;
+}
+
+const HOUR_HEIGHT = 56;
+const HOURS = Array.from({ length: 24 }, (_, i) => i);
+
+function isEditableLocalTask(task: Task): boolean {
+  return !task.notionId && task.groupId !== NOTION_GROUP_ID && task.groupId !== ARCHIVE_GROUP_ID;
+}
+
+export function CalendarView({
+  tasks,
+  selectedTaskId,
+  externalFocusDayIso,
+  onSelectTask,
+  onToggleTask,
+  onRescheduleTask,
+  onCreateAtSchedule,
+}: Props) {
+  const l = useLocale();
+  const [mode, setMode] = useState<CalendarMode>("month");
+  const [weekSpan, setWeekSpan] = useState<5 | 7>(7);
+  const [cursorIso, setCursorIso] = useState<string>(() => externalFocusDayIso || todayIso());
+
+  useEffect(() => {
+    if (externalFocusDayIso) setCursorIso(externalFocusDayIso);
+  }, [externalFocusDayIso]);
+  const [showUnscheduled, setShowUnscheduled] = useState(true);
+  const focusStyle = useModeStore((s) => s.calendarFocusStyle);
+  const focusSize = useModeStore((s) => s.calendarFocusSize);
+  const toggleCalendarFocus = useModeStore((s) => s.toggleCalendarFocus);
+  const focusActive = focusStyle !== "off";
+  const [dropDayIso, setDropDayIso] = useState<string | null>(null);
+  const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
+  const [resizing, setResizing] = useState<{
+    taskId: string;
+    dayIso: string;
+    startMin: number;
+    endMin: number;
+  } | null>(null);
+  const [daySpanResize, setDaySpanResize] = useState<{
+    taskId: string;
+    startDate: string;
+    origEndDate: string;
+    previewEndDate: string;
+    startTime: string | null;
+    endTime: string | null;
+    reminderAt: number | null;
+  } | null>(null);
+  const daySpanResizeRef = useRef(daySpanResize);
+  daySpanResizeRef.current = daySpanResize;
+  const justResizedRef = useRef(false);
+
+  const [nowMinutes, setNowMinutes] = useState(() => {
+    const d = new Date();
+    return d.getHours() * 60 + d.getMinutes();
+  });
+  const timeScrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const d = new Date();
+      setNowMinutes(d.getHours() * 60 + d.getMinutes());
+    }, 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if ((mode === "week" || mode === "day") && timeScrollRef.current) {
+      timeScrollRef.current.scrollTop = 7.5 * HOUR_HEIGHT;
+    }
+  }, [mode]);
+
+  useEffect(() => {
+    if (!resizing) return;
+    const onMove = (e: PointerEvent) => {
+      const col = document.querySelector<HTMLElement>(`.cal-time-col[data-day="${resizing.dayIso}"]`);
+      if (!col) return;
+      const rect = col.getBoundingClientRect();
+      const relY = Math.max(0, Math.min(rect.height, e.clientY - rect.top));
+      const rawMin = (relY / HOUR_HEIGHT) * 60;
+      const nextEnd = Math.max(resizing.startMin + 15, Math.min(24 * 60 - 1, snapMinutes(rawMin, 15)));
+      setResizing((prev) => (prev ? { ...prev, endMin: nextEnd } : null));
+    };
+    const onUp = () => {
+      const current = resizing;
+      setResizing(null);
+      if (!current) return;
+      const endClamped = Math.min(23 * 60 + 59, current.endMin);
+      void onRescheduleTask(current.taskId, {
+        updateSchedule: true,
+        startDate: current.dayIso,
+        endDate: null,
+        startTime: minutesToHHMM(current.startMin),
+        endTime: minutesToHHMM(endClamped),
+      });
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp, { once: true });
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+  }, [resizing, onRescheduleTask]);
+
+  const isDaySpanResizing = Boolean(daySpanResize);
+  useEffect(() => {
+    if (!isDaySpanResizing) return;
+    const prevCursor = document.body.style.cursor;
+    const prevUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = "ew-resize";
+    document.body.style.userSelect = "none";
+
+    const onMove = (e: PointerEvent) => {
+      const curr = daySpanResizeRef.current;
+      if (!curr) return;
+      const elements = document.elementsFromPoint(e.clientX, e.clientY);
+      let dayIso: string | null = null;
+      for (const el of elements) {
+        if (el instanceof HTMLElement && el.dataset.day && el.matches(".cal-day-cell, .cal-allday-cell")) {
+          dayIso = el.dataset.day;
+          break;
+        }
+      }
+      if (!dayIso) return;
+      const clampedEnd = clampResizeEndDate(curr.startDate, dayIso);
+      if (clampedEnd === curr.previewEndDate) return;
+      setDaySpanResize((prev) => (prev ? { ...prev, previewEndDate: clampedEnd } : null));
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setDaySpanResize(null);
+      }
+    };
+
+    const onUp = () => {
+      const current = daySpanResizeRef.current;
+      setDaySpanResize(null);
+      justResizedRef.current = true;
+      window.setTimeout(() => {
+        justResizedRef.current = false;
+      }, 0);
+      if (current && current.previewEndDate !== current.origEndDate) {
+        const isSingleDay = current.previewEndDate === current.startDate;
+        void onRescheduleTask(current.taskId, {
+          updateSchedule: true,
+          startDate: current.startDate,
+          endDate: isSingleDay ? null : current.previewEndDate,
+          startTime: isSingleDay ? current.startTime : null,
+          endTime: isSingleDay ? current.endTime : null,
+          reminderAt: current.reminderAt,
+        });
+      }
+    };
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("pointerup", onUp, { once: true });
+    return () => {
+      document.body.style.cursor = prevCursor;
+      document.body.style.userSelect = prevUserSelect;
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("pointerup", onUp);
+    };
+  }, [isDaySpanResizing, onRescheduleTask]);
+
+  const today = todayIso();
+  const cursorDate = useMemo(() => parseIsoDate(cursorIso) ?? new Date(), [cursorIso]);
+
+  const spans = useMemo(() => {
+    const list: TaskSpan[] = [];
+    for (const task of tasks) {
+      const span = getTaskSpan(task);
+      if (span) list.push(span);
+    }
+    return list;
+  }, [tasks]);
+
+  const effectiveSpans = useMemo(
+    () => applyDaySpanResizePreview(spans, daySpanResize),
+    [spans, daySpanResize],
+  );
+
+  const unscheduled = useMemo(
+    () =>
+      tasks.filter(
+        (task) => !task.completed && isEditableLocalTask(task) && getTaskSpan(task) === null,
+      ),
+    [tasks],
+  );
+
+  const monthHeading = useMemo(
+    () =>
+      new Intl.DateTimeFormat(l.locale, {
+        year: "numeric",
+        month: "long",
+      }).format(cursorDate),
+    [cursorDate, l.locale],
+  );
+
+  const weekdayShort = useMemo(() => {
+    const mon = new Date(2026, 10, 23); // Monday
+    const fmt = new Intl.DateTimeFormat(l.locale, { weekday: "short" });
+    return Array.from({ length: 7 }, (_, i) => fmt.format(new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + i)));
+  }, [l.locale]);
+
+  const monthGrid = useMemo(
+    () => getMonthGridDays(cursorDate.getFullYear(), cursorDate.getMonth()),
+    [cursorDate],
+  );
+  const monthWeeks = useMemo(() => {
+    const rows: string[][] = [];
+    for (let i = 0; i < monthGrid.length; i += 7) rows.push(monthGrid.slice(i, i + 7));
+    return rows;
+  }, [monthGrid]);
+
+  const defaultFocusCoord = useMemo(() => {
+    for (let r = 0; r < monthWeeks.length; r++) {
+      const c = monthWeeks[r].indexOf(today);
+      if (c !== -1) return { col: c + 0.5, row: r + 0.5 };
+    }
+    return { col: 3.5, row: Math.max(1, monthWeeks.length) / 2 };
+  }, [monthWeeks, today]);
+
+  const defaultSmoothCoord = useMemo(
+    () => ({
+      x: defaultFocusCoord.col / 7,
+      y: defaultFocusCoord.row / Math.max(1, monthWeeks.length),
+    }),
+    [defaultFocusCoord, monthWeeks.length],
+  );
+
+  const focusTargetRef = useRef<{ col: number; row: number }>(defaultFocusCoord);
+  const focusCurrentRef = useRef<{ col: number; row: number }>(defaultFocusCoord);
+  const smoothTargetRef = useRef<{ x: number; y: number }>(defaultSmoothCoord);
+  const smoothCurrentRef = useRef<{ x: number; y: number }>(defaultSmoothCoord);
+  const focusRafRef = useRef<number | null>(null);
+  const monthViewportRef = useRef<HTMLDivElement>(null);
+  const monthWeekdaysRef = useRef<HTMLDivElement>(null);
+  const monthWeeksRef = useRef<HTMLDivElement>(null);
+  const smoothBlurMaskRef = useRef<HTMLDivElement>(null);
+  const roiFrameRef = useRef<HTMLDivElement>(null);
+  const mosaicDomCacheRef = useRef<{
+    cellContainers: HTMLElement[];
+    dayCells: HTMLElement[];
+    spanBars: HTMLElement[];
+  }>({ cellContainers: [], dayCells: [], spanBars: [] });
+
+  const refreshMosaicDomCache = useCallback(() => {
+    const weeksEl = monthWeeksRef.current;
+    if (!weeksEl) {
+      mosaicDomCacheRef.current = { cellContainers: [], dayCells: [], spanBars: [] };
+      return;
+    }
+    mosaicDomCacheRef.current = {
+      cellContainers: Array.from(weeksEl.querySelectorAll<HTMLElement>(".cal-month-cells")),
+      dayCells: Array.from(weeksEl.querySelectorAll<HTMLElement>(".cal-day-cell[data-col][data-row]")),
+      spanBars: Array.from(weeksEl.querySelectorAll<HTMLElement>(".cal-span-bar[data-col-start][data-col-span]")),
+    };
+  }, []);
+
+  const resetFocusStyles = useCallback(
+    (activeStyle: "smooth" | "mosaic" | "off") => {
+      const weeksEl = monthWeeksRef.current;
+      const weekdaysEl = monthWeekdaysRef.current;
+      const roiEl = roiFrameRef.current;
+      const { cellContainers, dayCells, spanBars } = mosaicDomCacheRef.current;
+
+      if (activeStyle !== "smooth") {
+        if (weeksEl) weeksEl.style.removeProperty("transform");
+        if (weekdaysEl) weekdaysEl.style.removeProperty("transform");
+      }
+
+      if (activeStyle !== "mosaic") {
+        if (weekdaysEl) weekdaysEl.style.removeProperty("grid-template-columns");
+        if (weeksEl) weeksEl.style.gridTemplateRows = `repeat(${Math.max(1, monthWeeks.length)}, minmax(0, 1fr))`;
+        for (const container of cellContainers) {
+          container.style.removeProperty("grid-template-columns");
+        }
+        for (const cell of dayCells) {
+          cell.style.removeProperty("--cell-blur");
+          cell.style.removeProperty("--cell-opacity");
+          cell.style.removeProperty("--cell-focus");
+          delete cell.dataset.focused;
+        }
+        for (const bar of spanBars) {
+          const cs = Number(bar.dataset.colStart ?? 0);
+          const span = Number(bar.dataset.colSpan ?? 1);
+          bar.style.left = `calc(${(cs / 7) * 100}% + 3px)`;
+          bar.style.width = `calc(${(span / 7) * 100}% - 6px)`;
+        }
+      }
+
+      if (activeStyle === "off" && roiEl) {
+        roiEl.style.opacity = "0";
+      }
+    },
+    [monthWeeks.length],
+  );
+
+  const applySmoothFrame = useCallback(
+    (x: number, y: number) => {
+      const weeksEl = monthWeeksRef.current;
+      const weekdaysEl = monthWeekdaysRef.current;
+      const maskEl = smoothBlurMaskRef.current;
+      const roiEl = roiFrameRef.current;
+      if (!weeksEl) return;
+
+      const s = computeSmoothLensState(x, y, Math.max(1, monthWeeks.length), 1.42, 1.38, focusSize);
+      const tx = s.txCanvasPct.toFixed(3);
+      const ty = s.tyCanvasPct.toFixed(3);
+      weeksEl.style.transform = `translate3d(${tx}%, ${ty}%, 0)`;
+      if (weekdaysEl) {
+        weekdaysEl.style.transform = `translate3d(${tx}%, 0, 0)`;
+      }
+      if (maskEl) {
+        maskEl.style.setProperty("--lens-cx", `${s.maskCenterXPct.toFixed(2)}%`);
+        maskEl.style.setProperty("--lens-cy", `${s.maskCenterYPct.toFixed(2)}%`);
+        maskEl.style.setProperty("--lens-rx", `${s.maskRadiusXPct.toFixed(2)}%`);
+        maskEl.style.setProperty("--lens-ry", `${s.maskRadiusYPct.toFixed(2)}%`);
+      }
+      if (roiEl) {
+        roiEl.style.left = `${s.frameLeftPct.toFixed(2)}%`;
+        roiEl.style.top = `${s.frameTopPct.toFixed(2)}%`;
+        roiEl.style.width = `${s.frameWidthPct.toFixed(2)}%`;
+        roiEl.style.height = `${s.frameHeightPct.toFixed(2)}%`;
+        roiEl.style.opacity = "1";
+      }
+    },
+    [monthWeeks.length, focusSize],
+  );
+
+  const applyMosaicFrame = useCallback(
+    (c: number, r: number) => {
+      const weeksEl = monthWeeksRef.current;
+      const weekdaysEl = monthWeekdaysRef.current;
+      const roiEl = roiFrameRef.current;
+      if (!weeksEl) return;
+
+      const rowCount = Math.max(1, monthWeeks.length);
+      const { cellContainers, dayCells, spanBars } = mosaicDomCacheRef.current;
+
+      const colWeights = computeFocusTrackWeights(7, c, 1.15, 2.35);
+      const rowWeights = computeFocusTrackWeights(rowCount, r, 1.05, 1.85);
+      const colTemplate = colWeights.map((w) => `${w.toFixed(3)}fr`).join(" ");
+      const rowTemplate = rowWeights.map((w) => `${w.toFixed(3)}fr`).join(" ");
+
+      if (weekdaysEl) weekdaysEl.style.gridTemplateColumns = colTemplate;
+      weeksEl.style.gridTemplateRows = rowTemplate;
+      for (const container of cellContainers) {
+        container.style.gridTemplateColumns = colTemplate;
+      }
+
+      for (const cell of dayCells) {
+        const col = Number(cell.dataset.col);
+        const row = Number(cell.dataset.row);
+        const score = computeCellFocusScore(col, row, c, r, 1.35 * focusSize, 1.15 * focusSize);
+        const blurPx = score >= 0.44 ? 0 : ((0.44 - score) / 0.44) * 2.6;
+        const opacity = 0.48 + 0.52 * Math.min(1, score / 0.5);
+        const glow = Math.max(0, (score - 0.44) / 0.56);
+        cell.style.setProperty("--cell-blur", `${blurPx.toFixed(2)}px`);
+        cell.style.setProperty("--cell-opacity", opacity.toFixed(3));
+        cell.style.setProperty("--cell-focus", glow.toFixed(3));
+        cell.dataset.focused = score >= 0.44 ? "true" : "false";
+      }
+
+      const colStops = computeTrackOffsetsPct(colWeights);
+      const rowStops = computeTrackOffsetsPct(rowWeights);
+      for (const bar of spanBars) {
+        const cs = Math.max(0, Math.min(6, Number(bar.dataset.colStart ?? 0)));
+        const span = Math.max(1, Math.min(7 - cs, Number(bar.dataset.colSpan ?? 1)));
+        const leftPct = colStops[cs] ?? 0;
+        const widthPct = (colStops[cs + span] ?? 100) - leftPct;
+        bar.style.left = `calc(${leftPct.toFixed(3)}% + 3px)`;
+        bar.style.width = `calc(${widthPct.toFixed(3)}% - 6px)`;
+      }
+
+      if (roiEl) {
+        const frame = computeRoiFramePct(colStops, rowStops, c, r, 1.45 * focusSize, 1.2 * focusSize);
+        roiEl.style.left = `${frame.leftPct.toFixed(2)}%`;
+        roiEl.style.top = `${frame.topPct.toFixed(2)}%`;
+        roiEl.style.width = `${frame.widthPct.toFixed(2)}%`;
+        roiEl.style.height = `${frame.heightPct.toFixed(2)}%`;
+        roiEl.style.opacity = "1";
+      }
+    },
+    [monthWeeks.length, focusSize],
+  );
+
+  const startFocusSpring = useCallback(() => {
+    if (focusRafRef.current !== null || focusStyle === "off") return;
+    const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+    const step = () => {
+      focusRafRef.current = null;
+      if (focusStyle === "smooth") {
+        const target = smoothTargetRef.current;
+        const curr = smoothCurrentRef.current;
+        const dx = target.x - curr.x;
+        const dy = target.y - curr.y;
+        if (reduced || (Math.abs(dx) < 0.0008 && Math.abs(dy) < 0.0008)) {
+          smoothCurrentRef.current = { ...target };
+          applySmoothFrame(target.x, target.y);
+          return;
+        }
+        const next = { x: curr.x + dx * 0.16, y: curr.y + dy * 0.16 };
+        smoothCurrentRef.current = next;
+        applySmoothFrame(next.x, next.y);
+        focusRafRef.current = window.requestAnimationFrame(step);
+        return;
+      }
+
+      const target = focusTargetRef.current;
+      const curr = focusCurrentRef.current;
+      const dx = target.col - curr.col;
+      const dy = target.row - curr.row;
+      if (reduced || (Math.abs(dx) < 0.004 && Math.abs(dy) < 0.004)) {
+        focusCurrentRef.current = { ...target };
+        applyMosaicFrame(target.col, target.row);
+        return;
+      }
+      const next = { col: curr.col + dx * 0.22, row: curr.row + dy * 0.22 };
+      focusCurrentRef.current = next;
+      applyMosaicFrame(next.col, next.row);
+      focusRafRef.current = window.requestAnimationFrame(step);
+    };
+    focusRafRef.current = window.requestAnimationFrame(step);
+  }, [focusStyle, applySmoothFrame, applyMosaicFrame]);
+
+  useEffect(() => {
+    if (focusRafRef.current !== null) {
+      window.cancelAnimationFrame(focusRafRef.current);
+      focusRafRef.current = null;
+    }
+    focusTargetRef.current = defaultFocusCoord;
+    focusCurrentRef.current = defaultFocusCoord;
+    smoothTargetRef.current = defaultSmoothCoord;
+    smoothCurrentRef.current = defaultSmoothCoord;
+
+    if (mode === "month") {
+      refreshMosaicDomCache();
+      resetFocusStyles(focusStyle);
+      if (focusStyle === "smooth") {
+        applySmoothFrame(defaultSmoothCoord.x, defaultSmoothCoord.y);
+      } else if (focusStyle === "mosaic") {
+        applyMosaicFrame(defaultFocusCoord.col, defaultFocusCoord.row);
+      }
+    }
+    return () => {
+      if (focusRafRef.current !== null) {
+        window.cancelAnimationFrame(focusRafRef.current);
+        focusRafRef.current = null;
+      }
+    };
+  }, [
+    mode,
+    focusStyle,
+    defaultFocusCoord,
+    defaultSmoothCoord,
+    refreshMosaicDomCache,
+    resetFocusStyles,
+    applySmoothFrame,
+    applyMosaicFrame,
+    spans.length,
+  ]);
+
+  useEffect(() => {
+    if (mode !== "month") return;
+    refreshMosaicDomCache();
+    if (focusStyle === "mosaic") {
+      applyMosaicFrame(focusCurrentRef.current.col, focusCurrentRef.current.row);
+    }
+  }, [mode, focusStyle, daySpanResize?.previewEndDate, refreshMosaicDomCache, applyMosaicFrame]);
+
+  const beginDaySpanResize = (e: ReactPointerEvent, span: TaskSpan) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDaySpanResize({
+      taskId: span.task.id,
+      startDate: span.startDate,
+      origEndDate: span.endDate,
+      previewEndDate: span.endDate,
+      startTime: span.startTime,
+      endTime: span.endTime,
+      reminderAt: span.task.reminderAt ?? null,
+    });
+  };
+
+  const renderSpanResizeHandle = (span: TaskSpan) => (
+    <span
+      className="cal-span-resize-handle"
+      draggable={false}
+      onDragStart={(e) => e.preventDefault()}
+      onPointerDown={(e) => beginDaySpanResize(e, span)}
+      onClick={(e) => e.stopPropagation()}
+      title={l.t("拖动调整结束日期")}
+      aria-label={l.t("拖动调整结束日期")}
+    >
+      <svg viewBox="0 0 12 12" aria-hidden="true">
+        <path d="M2 6h7.5M6.5 3l3 3-3 3" />
+      </svg>
+    </span>
+  );
+
+  const handleMonthPointerMove = (
+    e: ReactPointerEvent<HTMLDivElement> | ReactDragEvent<HTMLDivElement>,
+  ) => {
+    if (focusStyle === "off" || mode !== "month") return;
+
+    if (focusStyle === "smooth") {
+      const vpEl = monthViewportRef.current;
+      if (!vpEl) return;
+      const rect = vpEl.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+      const x = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      const y = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
+      if (
+        Math.abs(x - smoothTargetRef.current.x) < 0.002 &&
+        Math.abs(y - smoothTargetRef.current.y) < 0.002
+      ) {
+        return;
+      }
+      smoothTargetRef.current = { x, y };
+      startFocusSpring();
+      return;
+    }
+
+    const cell = e.target instanceof Element ? e.target.closest<HTMLElement>("[data-col][data-row]") : null;
+    if (!cell) return;
+    const col = Number(cell.dataset.col);
+    const row = Number(cell.dataset.row);
+    if (!Number.isFinite(col) || !Number.isFinite(row)) return;
+    const nextTarget = { col: col + 0.5, row: row + 0.5 };
+    if (
+      Math.abs(nextTarget.col - focusTargetRef.current.col) < 0.01 &&
+      Math.abs(nextTarget.row - focusTargetRef.current.row) < 0.01
+    ) {
+      return;
+    }
+    focusTargetRef.current = nextTarget;
+    startFocusSpring();
+  };
+
+  const activeDays = useMemo(() => {
+    if (mode === "day") return [cursorIso];
+    if (mode === "week") return getWeekDays(cursorIso, weekSpan);
+    return monthGrid;
+  }, [mode, cursorIso, weekSpan, monthGrid]);
+
+  const stepNavigation = (direction: -1 | 1) => {
+    if (mode === "month") {
+      const next = new Date(cursorDate.getFullYear(), cursorDate.getMonth() + direction, 1);
+      setCursorIso(toIsoDate(next));
+    } else if (mode === "week") {
+      setCursorIso(addDays(cursorIso, direction * 7));
+    } else {
+      setCursorIso(addDays(cursorIso, direction));
+    }
+  };
+
+  const applyDrop = (taskId: string, targetDayIso: string, targetStartMin: number | null) => {
+    const task = tasks.find((t) => t.id === taskId);
+    if (!task || !isEditableLocalTask(task)) return;
+    const prevSpan = getTaskSpan(task);
+
+    if (targetStartMin !== null) {
+      const snappedStart = Math.max(0, Math.min(23 * 60 + 45, snapMinutes(targetStartMin, 15)));
+      const prevStart = prevSpan ? parseTimeToMinutes(prevSpan.startTime) : null;
+      const prevEnd = prevSpan ? parseTimeToMinutes(prevSpan.endTime) : null;
+      const duration =
+        prevStart !== null && prevEnd !== null && prevEnd > prevStart ? prevEnd - prevStart : 60;
+      const endMin = Math.min(23 * 60 + 59, snappedStart + duration);
+      void onRescheduleTask(task.id, {
+        updateSchedule: true,
+        startDate: targetDayIso,
+        endDate: null,
+        startTime: minutesToHHMM(snappedStart),
+        endTime: minutesToHHMM(endMin),
+        reminderAt: task.reminderAt ?? null,
+      });
+      return;
+    }
+
+    if (prevSpan && prevSpan.isMultiDay) {
+      const spanLen = Math.max(1, diffDays(prevSpan.startDate, prevSpan.endDate));
+      void onRescheduleTask(task.id, {
+        updateSchedule: true,
+        startDate: targetDayIso,
+        endDate: addDays(targetDayIso, spanLen),
+        startTime: null,
+        endTime: null,
+        reminderAt: task.reminderAt ?? null,
+      });
+      return;
+    }
+
+    // Month / All-day drop: keep single-day time on Month view, or clear time if explicitly dropped on All-day strip in Week/Day.
+    const preserveTime = mode === "month" && prevSpan?.isTimed;
+    void onRescheduleTask(task.id, {
+      updateSchedule: true,
+      startDate: targetDayIso,
+      endDate: null,
+      startTime: preserveTime ? prevSpan.startTime : null,
+      endTime: preserveTime ? prevSpan.endTime : null,
+      reminderAt: task.reminderAt ?? null,
+    });
+  };
+
+  const startDrag = (e: React.DragEvent, task: Task) => {
+    if (!isEditableLocalTask(task)) {
+      e.preventDefault();
+      return;
+    }
+    e.dataTransfer.setData("text/sticky-task-id", task.id);
+    e.dataTransfer.effectAllowed = "move";
+    setDraggedTaskId(task.id);
+  };
+
+  const readDraggedTaskId = (e: React.DragEvent) =>
+    e.dataTransfer.getData("text/sticky-task-id") || draggedTaskId;
+
+  return (
+    <div className="calendar-root">
+      <div className="calendar-toolbar">
+        <div className="calendar-toolbar-left">
+          <h2 className="calendar-heading">{monthHeading}</h2>
+          <div className="calendar-nav-group">
+            <button
+              type="button"
+              className="cal-nav-btn"
+              aria-label={l.t("上一周期")}
+              onClick={() => stepNavigation(-1)}
+            >
+              ‹
+            </button>
+            <button
+              type="button"
+              className="cal-today-btn"
+              onClick={() => {
+                setCursorIso(today);
+                focusTargetRef.current = defaultFocusCoord;
+                smoothTargetRef.current = defaultSmoothCoord;
+                if (focusActive && mode === "month") startFocusSpring();
+              }}
+            >
+              {l.t("今天")}
+            </button>
+            <button
+              type="button"
+              className="cal-nav-btn"
+              aria-label={l.t("下一周期")}
+              onClick={() => stepNavigation(1)}
+            >
+              ›
+            </button>
+          </div>
+        </div>
+
+        <div className="calendar-toolbar-right">
+          {mode === "week" && (
+            <div className="cal-segmented cal-segmented-compact" role="group" aria-label={l.t("周天数")}>
+              <button
+                type="button"
+                className={weekSpan === 5 ? "active" : ""}
+                onClick={() => setWeekSpan(5)}
+              >
+                {l.t("5 天")}
+              </button>
+              <button
+                type="button"
+                className={weekSpan === 7 ? "active" : ""}
+                onClick={() => setWeekSpan(7)}
+              >
+                {l.t("7 天")}
+              </button>
+            </div>
+          )}
+
+          <div className="cal-segmented" role="group" aria-label={l.t("日历视图模式")}>
+            {(
+              [
+                ["month", l.t("月")],
+                ["week", l.t("周")],
+                ["day", l.t("日")],
+              ] as const
+            ).map(([m, label]) => (
+              <button
+                key={m}
+                type="button"
+                className={mode === m ? "active" : ""}
+                aria-pressed={mode === m}
+                onClick={() => setMode(m)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {mode === "month" && (
+            <button
+              type="button"
+              className={`cal-drawer-toggle cal-focus-toggle${focusActive ? " active" : ""}`}
+              aria-pressed={focusActive}
+              title={l.t("切换日历动态聚焦与周边模糊")}
+              onClick={() => toggleCalendarFocus()}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="11" cy="11" r="6.5" />
+                <path d="m16 16 4.5 4.5" />
+              </svg>
+              <span>{l.t("动态聚焦")}</span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            className={`cal-drawer-toggle${showUnscheduled ? " active" : ""}`}
+            aria-pressed={showUnscheduled}
+            onClick={() => setShowUnscheduled((v) => !v)}
+          >
+            <span>{l.t("未排期")}</span>
+            <span className="cal-badge">{l.number(unscheduled.length)}</span>
+          </button>
+
+          <button
+            type="button"
+            className="btn-primary cal-add-btn"
+            onClick={() =>
+              onCreateAtSchedule({
+                startDate: cursorIso,
+                endDate: null,
+                startTime: null,
+                endTime: null,
+                reminderAt: null,
+              })
+            }
+          >
+            {l.t("＋ 新建日程")}
+          </button>
+        </div>
+      </div>
+
+      <div className="calendar-content">
+        <div className="calendar-surface">
+          {mode === "month" ? (
+            <div
+              className={`cal-month${focusStyle === "smooth" ? " is-focus-smooth" : focusStyle === "mosaic" ? " is-focus-mosaic" : ""}`}
+            >
+              <div className="cal-month-weekdays-clip">
+                <div ref={monthWeekdaysRef} className="cal-month-weekdays">
+                  {weekdayShort.map((label, idx) => (
+                    <div key={idx} className="cal-weekday-cell">
+                      {label}
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div
+                ref={monthViewportRef}
+                className="cal-month-viewport"
+                onPointerMove={handleMonthPointerMove}
+                onDragOver={handleMonthPointerMove}
+              >
+                <div
+                  ref={monthWeeksRef}
+                  className="cal-month-weeks"
+                  style={
+                    focusStyle === "mosaic"
+                      ? undefined
+                      : { gridTemplateRows: `repeat(${Math.max(1, monthWeeks.length)}, minmax(0, 1fr))` }
+                  }
+                >
+                  {monthWeeks.map((weekDays, rowIndex) => {
+                  const bars = layoutMonthWeekBars(weekDays, effectiveSpans);
+                  const maxLane = bars.reduce((acc, bar) => Math.max(acc, bar.lane + 1), 0);
+                  const visibleBars = bars.filter((b) => b.lane < 3);
+
+                  return (
+                    <div key={weekDays[0]} className="cal-month-week-row">
+                      <div className="cal-month-cells">
+                        {weekDays.map((dayIso, colIndex) => {
+                          const dayObj = parseIsoDate(dayIso);
+                          const isOtherMonth =
+                            dayObj &&
+                            (dayObj.getMonth() !== cursorDate.getMonth() ||
+                              dayObj.getFullYear() !== cursorDate.getFullYear());
+                          const isToday = dayIso === today;
+                          const isSpanPreview = Boolean(
+                            daySpanResize &&
+                              dayIso >= daySpanResize.startDate &&
+                              dayIso <= daySpanResize.previewEndDate,
+                          );
+                          const daySingles = effectiveSpans.filter(
+                            (s) => !s.isMultiDay && s.startDate === dayIso,
+                          );
+
+                          return (
+                            <div
+                              key={dayIso}
+                              data-day={dayIso}
+                              data-col={colIndex}
+                              data-row={rowIndex}
+                              className={`cal-day-cell${isToday ? " is-today" : ""}${isOtherMonth ? " is-outside" : ""}${dropDayIso === dayIso ? " is-drop-target" : ""}${isSpanPreview ? " is-span-preview" : ""}`}
+                              onDragOver={(e) => {
+                                e.preventDefault();
+                                e.dataTransfer.dropEffect = "move";
+                                if (dropDayIso !== dayIso) setDropDayIso(dayIso);
+                              }}
+                              onDragLeave={() => {
+                                if (dropDayIso === dayIso) setDropDayIso(null);
+                              }}
+                              onDrop={(e) => {
+                                e.preventDefault();
+                                setDropDayIso(null);
+                                const id = readDraggedTaskId(e);
+                                setDraggedTaskId(null);
+                                if (id) applyDrop(id, dayIso, null);
+                              }}
+                            >
+                              <div className="cal-day-top">
+                                <span className={`cal-day-num${isToday ? " is-today-pill" : ""}`}>
+                                  {dayObj ? dayObj.getDate() : dayIso.slice(-2)}
+                                </span>
+                                <button
+                                  type="button"
+                                  className="cal-day-add"
+                                  title={l.t("在此日新建任务")}
+                                  aria-label={`${l.t("在此日新建任务")} ${dayIso}`}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onCreateAtSchedule({
+                                      startDate: dayIso,
+                                      endDate: null,
+                                      startTime: null,
+                                      endTime: null,
+                                      reminderAt: null,
+                                    });
+                                  }}
+                                >
+                                  +
+                                </button>
+                              </div>
+                              <div
+                                className="cal-day-events"
+                                style={{ paddingTop: `${Math.min(3, maxLane) * 23}px` }}
+                              >
+                                {daySingles.map((span) => {
+                                  const task = span.task;
+                                  const editable = isEditableLocalTask(task);
+                                  const isResizingSpan = daySpanResize?.taskId === task.id;
+                                  return (
+                                    <div
+                                      key={task.id}
+                                      draggable={editable && !isResizingSpan}
+                                      onDragStart={(e) => startDrag(e, task)}
+                                      onDragEnd={() => {
+                                        setDraggedTaskId(null);
+                                        setDropDayIso(null);
+                                      }}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        if (justResizedRef.current) return;
+                                        onSelectTask(task);
+                                      }}
+                                      className={`cal-pill${task.completed ? " done" : ""}${task.notionId ? " is-notion" : ""}${selectedTaskId === task.id ? " is-selected" : ""}${isResizingSpan ? " is-resizing-span" : ""}`}
+                                    >
+                                      <button
+                                        type="button"
+                                        className="cal-mini-check"
+                                        data-checked={task.completed}
+                                        aria-checked={task.completed}
+                                        role="checkbox"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          void onToggleTask(task.id);
+                                        }}
+                                      />
+                                      {span.startTime && (
+                                        <span className="cal-pill-time">{span.startTime}</span>
+                                      )}
+                                      <span className="cal-pill-title">{task.title}</span>
+                                      {editable && renderSpanResizeHandle(span)}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      {visibleBars.length > 0 && (
+                        <div className="cal-month-bars-overlay">
+                          {visibleBars.map((bar) => {
+                            const task = bar.task;
+                            const editable = isEditableLocalTask(task);
+                            const isResizingSpan = daySpanResize?.taskId === task.id;
+                            const spanDays = diffDays(bar.span.startDate, bar.span.endDate) + 1;
+                            return (
+                              <div
+                                key={`${bar.task.id}-${weekDays[0]}`}
+                                data-col-start={bar.colStart}
+                                data-col-span={bar.colSpan}
+                                draggable={editable && !isResizingSpan}
+                                onDragStart={(e) => startDrag(e, task)}
+                                onDragEnd={() => {
+                                  setDraggedTaskId(null);
+                                  setDropDayIso(null);
+                                }}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (justResizedRef.current) return;
+                                  onSelectTask(task);
+                                }}
+                                className={`cal-span-bar${task.completed ? " done" : ""}${task.notionId ? " is-notion" : ""}${bar.continuesLeft ? " cont-left" : ""}${bar.continuesRight ? " cont-right" : ""}${selectedTaskId === task.id ? " is-selected" : ""}${isResizingSpan ? " is-resizing-span" : ""}`}
+                                style={{
+                                  left: `calc(${(bar.colStart / 7) * 100}% + 3px)`,
+                                  width: `calc(${(bar.colSpan / 7) * 100}% - 6px)`,
+                                  top: `${28 + bar.lane * 22}px`,
+                                }}
+                              >
+                                <button
+                                  type="button"
+                                  className="cal-mini-check"
+                                  data-checked={task.completed}
+                                  aria-checked={task.completed}
+                                  role="checkbox"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    void onToggleTask(task.id);
+                                  }}
+                                />
+                                <span className="cal-pill-title">{task.title}</span>
+                                {isResizingSpan && (
+                                  <span className="cal-span-resize-badge">{spanDays}d</span>
+                                )}
+                                {editable && !bar.continuesRight && renderSpanResizeHandle(bar.span)}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                </div>
+                <div ref={smoothBlurMaskRef} className="cal-smooth-blur-mask" aria-hidden="true" />
+                <div ref={roiFrameRef} className="cal-roi-frame" aria-hidden="true" />
+              </div>
+            </div>
+          ) : (
+            <div className="cal-timeline-root">
+              <div
+                className="cal-timeline-header"
+                style={{ gridTemplateColumns: `56px repeat(${activeDays.length}, minmax(0, 1fr))` }}
+              >
+                <div className="cal-gutter-corner" />
+                {activeDays.map((dayIso) => {
+                  const d = parseIsoDate(dayIso);
+                  const isToday = dayIso === today;
+                  const weekdayLabel = d
+                    ? new Intl.DateTimeFormat(l.locale, { weekday: "short" }).format(d)
+                    : "";
+                  return (
+                    <div
+                      key={dayIso}
+                      className={`cal-tl-day-head${isToday ? " is-today" : ""}`}
+                    >
+                      <span className="cal-tl-weekday">{weekdayLabel}</span>
+                      <span className={`cal-tl-daynum${isToday ? " is-today-pill" : ""}`}>
+                        {d ? d.getDate() : dayIso.slice(-2)}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div
+                className="cal-allday-row"
+                style={{ gridTemplateColumns: `56px repeat(${activeDays.length}, minmax(0, 1fr))` }}
+              >
+                <div className="cal-allday-label">{l.t("全天")}</div>
+                {activeDays.map((dayIso) => {
+                  const allDayItems = effectiveSpans.filter(
+                    (s) => !s.isTimed && s.startDate <= dayIso && dayIso <= s.endDate,
+                  );
+                  const isSpanPreview = Boolean(
+                    daySpanResize &&
+                      dayIso >= daySpanResize.startDate &&
+                      dayIso <= daySpanResize.previewEndDate,
+                  );
+                  return (
+                    <div
+                      key={dayIso}
+                      data-day={dayIso}
+                      className={`cal-allday-cell${dropDayIso === `all-${dayIso}` ? " is-drop-target" : ""}${isSpanPreview ? " is-span-preview" : ""}`}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = "move";
+                        if (dropDayIso !== `all-${dayIso}`) setDropDayIso(`all-${dayIso}`);
+                      }}
+                      onDragLeave={() => {
+                        if (dropDayIso === `all-${dayIso}`) setDropDayIso(null);
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        setDropDayIso(null);
+                        const id = readDraggedTaskId(e);
+                        setDraggedTaskId(null);
+                        if (id) applyDrop(id, dayIso, null);
+                      }}
+                    >
+                      {allDayItems.map((span) => {
+                        const editable = isEditableLocalTask(span.task);
+                        const isResizingSpan = daySpanResize?.taskId === span.task.id;
+                        return (
+                          <div
+                            key={span.task.id}
+                            draggable={editable && !isResizingSpan}
+                            onDragStart={(e) => startDrag(e, span.task)}
+                            onDragEnd={() => {
+                              setDraggedTaskId(null);
+                              setDropDayIso(null);
+                            }}
+                            onClick={() => {
+                              if (justResizedRef.current) return;
+                              onSelectTask(span.task);
+                            }}
+                            className={`cal-pill${span.task.completed ? " done" : ""}${span.task.notionId ? " is-notion" : ""}${selectedTaskId === span.task.id ? " is-selected" : ""}${isResizingSpan ? " is-resizing-span" : ""}`}
+                          >
+                            <button
+                              type="button"
+                              className="cal-mini-check"
+                              data-checked={span.task.completed}
+                              aria-checked={span.task.completed}
+                              role="checkbox"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void onToggleTask(span.task.id);
+                              }}
+                            />
+                            <span className="cal-pill-title">{span.task.title}</span>
+                            {editable && dayIso === span.endDate && renderSpanResizeHandle(span)}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="cal-time-scroll" ref={timeScrollRef}>
+                <div
+                  className="cal-time-grid"
+                  style={{
+                    gridTemplateColumns: `56px repeat(${activeDays.length}, minmax(0, 1fr))`,
+                    height: `${24 * HOUR_HEIGHT}px`,
+                  }}
+                >
+                  <div className="cal-time-gutter">
+                    {HOURS.map((h) => (
+                      <div key={h} className="cal-hour-label" style={{ height: `${HOUR_HEIGHT}px` }}>
+                        {h === 0 ? "" : `${String(h).padStart(2, "0")}:00`}
+                      </div>
+                    ))}
+                  </div>
+
+                  {activeDays.map((dayIso) => {
+                    const isToday = dayIso === today;
+                    const dayTimed = layoutTimedDayEvents(dayIso, effectiveSpans, HOUR_HEIGHT);
+                    return (
+                      <div
+                        key={dayIso}
+                        data-day={dayIso}
+                        className="cal-time-col"
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          e.dataTransfer.dropEffect = "move";
+                          if (dropDayIso !== dayIso) setDropDayIso(dayIso);
+                        }}
+                        onDragLeave={() => {
+                          if (dropDayIso === dayIso) setDropDayIso(null);
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          setDropDayIso(null);
+                          const id = readDraggedTaskId(e);
+                          setDraggedTaskId(null);
+                          if (!id) return;
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          const relY = Math.max(0, Math.min(rect.height, e.clientY - rect.top));
+                          const minutes = (relY / HOUR_HEIGHT) * 60;
+                          applyDrop(id, dayIso, minutes);
+                        }}
+                      >
+                        {HOURS.map((h) => (
+                          <div
+                            key={h}
+                            className="cal-hour-slot"
+                            style={{ height: `${HOUR_HEIGHT}px` }}
+                            onClick={() => {
+                              const startTime = `${String(h).padStart(2, "0")}:00`;
+                              const endTime = `${String(Math.min(23, h + 1)).padStart(2, "0")}:${h === 23 ? "59" : "00"}`;
+                              onCreateAtSchedule({
+                                startDate: dayIso,
+                                endDate: null,
+                                startTime,
+                                endTime,
+                                reminderAt: null,
+                              });
+                            }}
+                          />
+                        ))}
+
+                        {isToday && (
+                          <div
+                            className="cal-now-line"
+                            style={{ top: `${(nowMinutes / 60) * HOUR_HEIGHT}px` }}
+                          >
+                            <span className="cal-now-dot" />
+                          </div>
+                        )}
+
+                        {dayTimed.map((ev) => {
+                          const task = ev.task;
+                          const editable = isEditableLocalTask(task);
+                          const isResizingThis = resizing?.taskId === task.id;
+                          const effectiveEnd = isResizingThis ? resizing.endMin : ev.endMin;
+                          const height = isResizingThis
+                            ? Math.max(((effectiveEnd - ev.startMin) / 60) * HOUR_HEIGHT, 22)
+                            : ev.height;
+                          const timeLabel = `${minutesToHHMM(ev.startMin)}–${minutesToHHMM(effectiveEnd)}`;
+
+                          return (
+                            <div
+                              key={task.id}
+                              draggable={editable && !isResizingThis}
+                              onDragStart={(e) => startDrag(e, task)}
+                              onDragEnd={() => {
+                                setDraggedTaskId(null);
+                                setDropDayIso(null);
+                              }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onSelectTask(task);
+                              }}
+                              className={`cal-timed-card${task.completed ? " done" : ""}${task.notionId ? " is-notion" : ""}${selectedTaskId === task.id ? " is-selected" : ""}`}
+                              style={{
+                                top: `${ev.top}px`,
+                                height: `${height}px`,
+                                left: `calc(${(ev.colIndex / ev.colCount) * 100}% + 3px)`,
+                                width: `calc(${100 / ev.colCount}% - 6px)`,
+                              }}
+                            >
+                              <div className="cal-timed-head">
+                                <button
+                                  type="button"
+                                  className="cal-mini-check"
+                                  data-checked={task.completed}
+                                  aria-checked={task.completed}
+                                  role="checkbox"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    void onToggleTask(task.id);
+                                  }}
+                                />
+                                <span className="cal-timed-title">{task.title}</span>
+                              </div>
+                              <span className="cal-timed-time">{timeLabel}</span>
+                              {editable && (
+                                <div
+                                  className="cal-resize-handle"
+                                  title={l.t("拖动调整时长")}
+                                  onPointerDown={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    setResizing({
+                                      taskId: task.id,
+                                      dayIso,
+                                      startMin: ev.startMin,
+                                      endMin: ev.endMin,
+                                    });
+                                  }}
+                                />
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {showUnscheduled && (
+          <aside className="cal-unscheduled" aria-label={l.t("未排期任务")}>
+            <div className="cal-unscheduled-head">
+              <h3>{l.t("未排期任务")}</h3>
+              <span className="group-count">{l.number(unscheduled.length)}</span>
+            </div>
+            <p className="cal-unscheduled-hint">{l.t("拖动任务到日历格子即可快速排期")}</p>
+            <div className="cal-unscheduled-list">
+              {unscheduled.length === 0 ? (
+                <div className="board-empty">{l.t("全部本地任务均已排期")}</div>
+              ) : (
+                unscheduled.map((task) => (
+                  <div
+                    key={task.id}
+                    draggable
+                    onDragStart={(e) => startDrag(e, task)}
+                    onDragEnd={() => {
+                      setDraggedTaskId(null);
+                      setDropDayIso(null);
+                    }}
+                    onClick={() => onSelectTask(task)}
+                    className={`cal-unscheduled-card${selectedTaskId === task.id ? " is-selected" : ""}`}
+                  >
+                    <span className="cal-pill-title">{task.title}</span>
+                  </div>
+                ))
+              )}
+            </div>
+          </aside>
+        )}
+      </div>
+    </div>
+  );
+}

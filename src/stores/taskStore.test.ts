@@ -5,7 +5,7 @@ vi.mock("../services/tauriApi", () => ({
   apiClearArchive: vi.fn(), apiCreateGroup: vi.fn(), apiDeleteGroup: vi.fn(),
   apiDeleteTask: vi.fn(), apiForceSync: vi.fn(), apiGetSyncState: vi.fn(),
   apiGetTaskView: vi.fn(), apiImportTasks: vi.fn(), apiListenSyncState: vi.fn(),
-  apiReorderGroups: vi.fn(), apiReorderTasks: vi.fn(), apiToggleTask: vi.fn(),
+  apiReorderGroups: vi.fn(), apiReorderTasks: vi.fn(), apiToggleTask: vi.fn(), apiUpdateTask: vi.fn(),
 }));
 import * as api from "../services/tauriApi";
 import { createTaskStore } from "./taskStore";
@@ -44,6 +44,7 @@ beforeEach(() => {
   vi.mocked(api.apiClearArchive).mockResolvedValue([archived.id]);
   vi.mocked(api.apiReorderGroups).mockResolvedValue(null);
   vi.mocked(api.apiReorderTasks).mockResolvedValue(null);
+  vi.mocked(api.apiUpdateTask).mockResolvedValue(task);
 });
 
 describe("coherent task views", () => {
@@ -292,5 +293,27 @@ describe("authoritative sync state", () => {
       [task.id, 1],
       [secondTask.id, 2],
     ]);
+  });
+
+  it("optimistically updates a local task schedule/reminder and rolls back on failure", async () => {
+    const pending = deferred<Task>();
+    vi.mocked(api.apiUpdateTask).mockReturnValueOnce(pending.promise);
+    const save = store.getState().updateTask(task.id, {
+      title: "Updated",
+      updateSchedule: true,
+      startDate: "2026-11-24",
+      startTime: "11:00",
+      endTime: "15:00",
+      reminderAt: 99_000,
+    });
+    expect(store.getState().tasks[0].title).toBe("Updated");
+    expect(store.getState().tasks[0].date).toBe("2026-11-24 11:00–15:00");
+    expect(store.getState().tasks[0].reminderAt).toBe(99_000);
+
+    pending.reject(new Error("保存失败"));
+    await expect(save).rejects.toThrow("保存失败");
+    expect(store.getState().tasks[0].title).toBe("One");
+    expect(store.getState().tasks[0].date).toBeNull();
+    expect(store.getState().operationError?.message).toBe("保存失败");
   });
 });

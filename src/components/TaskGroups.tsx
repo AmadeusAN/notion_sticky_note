@@ -10,6 +10,8 @@ interface Props {
   onAddTasks: (groupId: string) => void;
   onConfirmGroup: (group: Group) => void;
   onConfirmTask: (task: Task) => void;
+  onEditTask?: (task: Task) => void;
+  filterGroupId?: string | null;
 }
 
 type TaskIndex = Map<string, Task[]>;
@@ -62,6 +64,7 @@ const TaskGroup = memo(function TaskGroup({
   onAddTasks,
   onConfirmGroup,
   onConfirmTask,
+  onEditTask,
   canDragGroup = false,
   sortable,
 }: SectionProps) {
@@ -177,6 +180,7 @@ const TaskGroup = memo(function TaskGroup({
             key={task.id}
             task={task}
             onDelete={isLocal || isArchive ? onConfirmTask : undefined}
+            onEdit={isLocal ? onEditTask : undefined}
             canDrag={canDragTasks}
             sortable={canDragTasks ? taskSortable.getItemProps(task.id) : undefined}
           />
@@ -186,7 +190,7 @@ const TaskGroup = memo(function TaskGroup({
   );
 });
 
-export const TaskGroups = memo(function TaskGroups({ onAddTasks, onConfirmGroup, onConfirmTask }: Props) {
+export const TaskGroups = memo(function TaskGroups({ onAddTasks, onConfirmGroup, onConfirmTask, onEditTask, filterGroupId = null }: Props) {
   const tasks = useTaskStore((s) => s.tasks);
   const groups = useTaskStore((s) => s.groups);
   const hasPendingGroup = useTaskStore((s) => Object.keys(s.pendingGroups).length > 0);
@@ -196,8 +200,9 @@ export const TaskGroups = memo(function TaskGroups({ onAddTasks, onConfirmGroup,
   useEffect(() => { previousIndex.current = taskIndex; }, [taskIndex]);
   const orderedGroups = useMemo(() => {
     const rank = (group: Group) => group.kind === "notion" ? 0 : group.kind === "archive" ? 2 : 1;
-    return [...groups].sort((a, b) => rank(a) - rank(b) || a.position - b.position);
-  }, [groups]);
+    const filtered = filterGroupId ? groups.filter((g) => g.id === filterGroupId) : groups;
+    return [...filtered].sort((a, b) => rank(a) - rank(b) || a.position - b.position);
+  }, [groups, filterGroupId]);
 
   const notionGroups = useMemo(() => orderedGroups.filter((g) => g.kind === "notion"), [orderedGroups]);
   const localGroups = useMemo(() => orderedGroups.filter((g) => g.kind === "local"), [orderedGroups]);
@@ -243,6 +248,7 @@ export const TaskGroups = memo(function TaskGroups({ onAddTasks, onConfirmGroup,
               onAddTasks={onAddTasks}
               onConfirmGroup={onConfirmGroup}
               onConfirmTask={onConfirmTask}
+              onEditTask={onEditTask}
               canDragGroup={canDragGroups}
               sortable={canDragGroups ? groupSortable.getItemProps(group.id) : undefined}
             />

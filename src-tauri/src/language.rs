@@ -126,6 +126,13 @@ pub fn labels(language: EffectiveLanguage) -> [&'static str; 3] {
     }
 }
 
+pub fn switch_mode_label(language: EffectiveLanguage) -> &'static str {
+    match language {
+        EffectiveLanguage::Chinese => "切换主面板 / 便签",
+        EffectiveLanguage::English => "Switch Workspace / Sticky",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,11 +1,12 @@
 import { create } from "zustand";
-import type { Group, SyncState, Task, TaskView } from "../types";
+import type { Group, SyncState, Task, TaskScheduleInput, TaskUpdateInput, TaskView } from "../types";
 import { ARCHIVE_GROUP_ID, NOTION_GROUP_ID } from "../types";
 import {
   apiClearArchive, apiCreateGroup, apiDeleteGroup, apiDeleteTask, apiForceSync,
   apiGetSyncState, apiGetTaskView, apiImportTasks, apiListenSyncState,
-  apiReorderGroups, apiReorderTasks, apiToggleTask,
+  apiReorderGroups, apiReorderTasks, apiToggleTask, apiUpdateTask,
 } from "../services/tauriApi";
+import { buildDateSummary } from "../services/taskDate";
 
 interface OperationError {
   key: string;
@@ -21,7 +22,7 @@ interface TaskState {
   syncState: SyncState;
   syncRequestPending: boolean;
   operationError: OperationError | null;
-  pendingTasks: Record<string, "toggle" | "delete">;
+  pendingTasks: Record<string, "toggle" | "delete" | "update">;
   pendingGroups: Record<string, "import" | "delete">;
   busyGroups: Record<string, number>;
   creatingGroup: boolean;
@@ -34,7 +35,13 @@ interface TaskState {
   deleteGroup: (id: string) => Promise<void>;
   reorderGroups: (orderedIds: string[]) => Promise<void>;
   reorderTasks: (groupId: string, orderedIds: string[]) => Promise<void>;
-  importTasks: (titles: string[], groupId: string | null, newGroupName: string | null) => Promise<void>;
+  importTasks: (
+    titles: string[],
+    groupId: string | null,
+    newGroupName: string | null,
+    schedule?: TaskScheduleInput,
+  ) => Promise<void>;
+  updateTask: (id: string, update: TaskUpdateInput) => Promise<Task | null>;
   deleteTask: (id: string) => Promise<void>;
   toggleTask: (id: string) => Promise<void>;
   clearArchive: () => Promise<void>;
@@ -53,7 +60,14 @@ function errMsg(error: unknown): string {
 function sameTask(a: Task, b: Task): boolean {
   return a.id === b.id && a.notionId === b.notionId && a.title === b.title &&
     a.completed === b.completed && a.progress === b.progress && a.remain === b.remain &&
-    a.date === b.date && a.updatedTime === b.updatedTime && a.groupId === b.groupId &&
+    a.date === b.date &&
+    (a.startDate ?? null) === (b.startDate ?? null) &&
+    (a.endDate ?? null) === (b.endDate ?? null) &&
+    (a.startTime ?? null) === (b.startTime ?? null) &&
+    (a.endTime ?? null) === (b.endTime ?? null) &&
+    (a.reminderAt ?? null) === (b.reminderAt ?? null) &&
+    (a.remindedAt ?? null) === (b.remindedAt ?? null) &&
+    a.updatedTime === b.updatedTime && a.groupId === b.groupId &&
     (a.position ?? 0) === (b.position ?? 0) &&
     a.tags.length === b.tags.length && a.tags.every((tag, index) => tag === b.tags[index]);
 }
@@ -226,7 +240,7 @@ export function createTaskStore() {
         finally { set({ creatingGroup: false }); end([]); }
       },
 
-      importTasks: async (titles, groupId, newGroupName) => {
+      importTasks: async (titles, groupId, newGroupName, schedule) => {
         if (groupId) writable(groupId);
         if (groupId ? get().pendingGroups[groupId] : get().creatingGroup) throw new Error("正在向该分组添加任务");
         const groupIds = groupId ? [groupId] : [];
@@ -236,18 +250,76 @@ export function createTaskStore() {
         else set({ creatingGroup: true });
         begin(key, groupIds);
         try {
-          const result = await apiImportTasks(submittedTitles, groupId, newGroupName);
+          const result = schedule === undefined
+            ? await apiImportTasks(submittedTitles, groupId, newGroupName)
+            : await apiImportTasks(submittedTitles, groupId, newGroupName, schedule);
           set((state) => ({
             tasks: orderedTasks([...state.tasks, ...result.tasks]),
             groups: state.groups.some((group) => group.id === result.group.id) ? state.groups : [...state.groups, result.group],
           }));
         } catch (error) {
-          report(key, error, () => get().importTasks(submittedTitles, groupId, newGroupName));
+          report(key, error, () => get().importTasks(submittedTitles, groupId, newGroupName, schedule));
           throw error;
         } finally {
           if (groupId) finishGroup(groupId);
           else set({ creatingGroup: false });
           end(groupIds);
+        }
+      },
+
+      updateTask: async (id, update) => {
+        if (get().pendingTasks[id]) return null;
+        const previous = get().tasks.find((task) => task.id === id);
+        if (!previous) return null;
+        const nextGroupId =
+          update.groupId && update.groupId !== previous.groupId ? update.groupId : previous.groupId;
+        const trackedGroups =
+          nextGroupId === previous.groupId ? [previous.groupId] : [previous.groupId, nextGroupId];
+        for (const gid of trackedGroups) writable(gid);
+        const key = `update-task:${id}`;
+        const previousTasks = get().tasks;
+        const nextDate = update.updateSchedule
+          ? buildDateSummary({
+              startDate: update.startDate,
+              endDate: update.endDate,
+              startTime: update.startDate ? update.startTime : null,
+              endTime: update.startDate && update.startTime ? update.endTime : null,
+            })
+          : previous.date;
+        const optimistic: Task = {
+          ...previous,
+          title: update.title !== undefined ? update.title.trim() || previous.title : previous.title,
+          groupId: nextGroupId,
+          date: nextDate,
+          ...(update.updateSchedule
+            ? {
+                startDate: update.startDate ?? null,
+                endDate: update.endDate && update.endDate !== update.startDate ? update.endDate : null,
+                startTime: update.startDate ? update.startTime ?? null : null,
+                endTime: update.startDate && update.startTime ? update.endTime ?? null : null,
+                reminderAt: update.reminderAt ?? null,
+                remindedAt: update.reminderAt === previous.reminderAt ? (previous.remindedAt ?? null) : null,
+              }
+            : {}),
+        };
+        set((state) => ({
+          pendingTasks: { ...state.pendingTasks, [id]: "update" },
+          tasks: state.tasks.map((task) => (task.id === id ? optimistic : task)),
+        }));
+        begin(key, trackedGroups);
+        try {
+          const persisted = await apiUpdateTask(id, update);
+          set((state) => ({
+            tasks: orderedTasks(state.tasks.map((task) => (task.id === id ? persisted : task))),
+          }));
+          return persisted;
+        } catch (error) {
+          set({ tasks: previousTasks });
+          report(key, error, () => get().updateTask(id, update));
+          throw error;
+        } finally {
+          finishTask(id);
+          end(trackedGroups);
         }
       },
 

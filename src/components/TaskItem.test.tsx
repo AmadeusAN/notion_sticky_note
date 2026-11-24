@@ -159,3 +159,23 @@ it("does not expose cached Notion deletion even when a delete handler is supplie
   expect(container.querySelector(".task-text")?.textContent).toBe(task.title);
   expect(container.querySelector(".task-del")).toBeNull();
 });
+
+it("renders local schedule and reminder badges and invokes onEdit only for local active tasks", async () => {
+  const onEdit = vi.fn();
+  const scheduledLocal: Task = {
+    ...localTask,
+    date: "2026-11-24 11:00–15:00",
+    startDate: "2026-11-24",
+    startTime: "11:00",
+    endTime: "15:00",
+    reminderAt: new Date(2026, 10, 24, 10, 45).getTime(),
+  };
+  await act(async () => root.render(<TaskItem task={scheduledLocal} onEdit={onEdit} />));
+  expect(container.querySelector('[data-kind="date"]')?.textContent).toContain("11:00–15:00");
+  expect(container.querySelector('[data-kind="reminder"]')?.textContent).toContain("10:45");
+  await act(async () => container.querySelector<HTMLButtonElement>(".task-edit")!.click());
+  expect(onEdit).toHaveBeenCalledWith(scheduledLocal);
+
+  await act(async () => root.render(<TaskItem task={task} onEdit={onEdit} />));
+  expect(container.querySelector(".task-edit")).toBeNull();
+});
