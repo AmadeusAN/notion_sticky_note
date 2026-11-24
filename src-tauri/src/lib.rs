@@ -97,6 +97,16 @@ async fn delete_group(id: String, state: State<'_, AppState>) -> Result<Vec<Stri
     database_work(state.db.clone(), move |db| db.delete_group(&id)).await
 }
 
+#[tauri::command]
+async fn reorder_groups(ordered_ids: Vec<String>, state: State<'_, AppState>) -> Result<Vec<Group>, String> {
+    database_work(state.db.clone(), move |db| db.reorder_groups(ordered_ids)).await
+}
+
+#[tauri::command]
+async fn reorder_tasks(group_id: String, ordered_ids: Vec<String>, state: State<'_, AppState>) -> Result<Vec<Task>, String> {
+    database_work(state.db.clone(), move |db| db.reorder_tasks(&group_id, ordered_ids)).await
+}
+
 
 #[tauri::command]
 async fn import_tasks(
@@ -524,6 +534,8 @@ pub fn run() {
             get_task_view,
             create_group,
             delete_group,
+            reorder_groups,
+            reorder_tasks,
             import_tasks,
             delete_task,
             clear_archive,

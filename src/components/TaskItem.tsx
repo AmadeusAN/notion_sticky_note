@@ -5,14 +5,17 @@ import type { Task } from "../types";
 import { useTaskStore } from "../stores/taskStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import { isNotionConfigured, NOTION_GROUP_ID } from "../types";
+import type { SortableItemProps } from "./useSortableList";
 
 interface Props {
   task: Task;
   /** When provided (local tasks only), show a delete control. */
   onDelete?: (task: Task) => void;
+  canDrag?: boolean;
+  sortable?: SortableItemProps;
 }
 
-export const TaskItem = memo(function TaskItem({ task, onDelete }: Props) {
+export const TaskItem = memo(function TaskItem({ task, onDelete, canDrag = false, sortable }: Props) {
   const l = useLocale();
   const toggleTask = useTaskStore((s) => s.toggleTask);
   const configured = useSettingsStore((s) => isNotionConfigured(s.savedNotion));
@@ -23,11 +26,25 @@ export const TaskItem = memo(function TaskItem({ task, onDelete }: Props) {
   const busy = Boolean(pending) || groupDeleting || archiveBusy;
   const canDelete = Boolean(onDelete) && !task.notionId && task.groupId !== NOTION_GROUP_ID;
 
+  const canDragRow = canDrag && !busy;
+  const itemClass = [
+    "task-item",
+    task.completed ? "done" : "",
+    canDragRow ? "is-draggable" : "",
+    sortable?.className ?? "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
     <div
-      className={`task-item${task.completed ? " done" : ""}`}
+      ref={sortable?.ref}
+      style={sortable?.style}
+      className={itemClass}
       aria-busy={Boolean(pending)}
       data-busy={Boolean(pending)}
+      data-drag-active={sortable?.["data-drag-active"]}
+      onPointerDown={canDragRow ? sortable?.onPointerDown : undefined}
     >
       <button
         type="button"

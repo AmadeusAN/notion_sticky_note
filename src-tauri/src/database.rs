@@ -59,88 +59,105 @@ impl Database {
         let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
         let version: u32 = tx.query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(|e| e.to_string())?;
-        if version == 1 {
+        if version == 2 {
             return Ok(());
         }
-        if version > 1 {
+        if version > 2 {
             return Err(crate::language::text("This database was created by a newer version of Sticky Note.", "数据库版本高于当前应用支持的版本").into());
         }
-        tx.execute_batch(
-            "CREATE TABLE IF NOT EXISTS tasks (
-                id TEXT PRIMARY KEY,
-                notion_id TEXT,
-                title TEXT NOT NULL,
-                completed INTEGER NOT NULL DEFAULT 0,
-                progress TEXT,
-                remain TEXT,
-                date TEXT,
-                tags TEXT NOT NULL DEFAULT '[]',
-                updated_time INTEGER NOT NULL,
-                group_id TEXT NOT NULL DEFAULT 'notion',
-                archive_source_group_id TEXT
-             );
-             CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-             );
-             CREATE TABLE IF NOT EXISTS groups (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                kind TEXT NOT NULL DEFAULT 'local',
-                position INTEGER NOT NULL DEFAULT 0,
-                created_at INTEGER NOT NULL
-             );
-             CREATE TABLE IF NOT EXISTS pending_ops (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                task_id TEXT NOT NULL,
-                completed INTEGER NOT NULL,
-                created_at INTEGER NOT NULL
-             );",
-        ).map_err(|e| e.to_string())?;
-        for (column, definition) in [
-            ("group_id", "group_id TEXT NOT NULL DEFAULT 'notion'"),
-            ("archive_source_group_id", "archive_source_group_id TEXT"),
-        ] {
-            let exists: bool = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('tasks') WHERE name = ?1)",
-                params![column], |row| row.get(0),
+        if version == 0 {
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS tasks (
+                    id TEXT PRIMARY KEY,
+                    notion_id TEXT,
+                    title TEXT NOT NULL,
+                    completed INTEGER NOT NULL DEFAULT 0,
+                    progress TEXT,
+                    remain TEXT,
+                    date TEXT,
+                    tags TEXT NOT NULL DEFAULT '[]',
+                    updated_time INTEGER NOT NULL,
+                    group_id TEXT NOT NULL DEFAULT 'notion',
+                    archive_source_group_id TEXT,
+                    position INTEGER NOT NULL DEFAULT 0
+                 );
+                 CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                 );
+                 CREATE TABLE IF NOT EXISTS groups (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    kind TEXT NOT NULL DEFAULT 'local',
+                    position INTEGER NOT NULL DEFAULT 0,
+                    created_at INTEGER NOT NULL
+                 );
+                 CREATE TABLE IF NOT EXISTS pending_ops (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id TEXT NOT NULL,
+                    completed INTEGER NOT NULL,
+                    created_at INTEGER NOT NULL
+                 );",
             ).map_err(|e| e.to_string())?;
-            if !exists {
-                tx.execute_batch(&format!("ALTER TABLE tasks ADD COLUMN {definition}"))
-                    .map_err(|e| e.to_string())?;
+            for (column, definition) in [
+                ("group_id", "group_id TEXT NOT NULL DEFAULT 'notion'"),
+                ("archive_source_group_id", "archive_source_group_id TEXT"),
+                ("position", "position INTEGER NOT NULL DEFAULT 0"),
+            ] {
+                let exists: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM pragma_table_info('tasks') WHERE name = ?1)",
+                    params![column], |row| row.get(0),
+                ).map_err(|e| e.to_string())?;
+                if !exists {
+                    tx.execute_batch(&format!("ALTER TABLE tasks ADD COLUMN {definition}"))
+                        .map_err(|e| e.to_string())?;
+                }
             }
-        }
-        let now = chrono::Utc::now().timestamp_millis();
-        tx.execute(
-            "INSERT OR IGNORE INTO groups(id, name, kind, position, created_at)
-             VALUES(?1, '来自 Notion', 'notion', 0, ?2)",
-            params![NOTION_GROUP_ID, now],
-        ).map_err(|e| e.to_string())?;
-        tx.execute(
-            "INSERT OR IGNORE INTO groups(id, name, kind, position, created_at)
-             VALUES(?1, 'Archive', 'archive', 0, ?2)",
-            params![ARCHIVE_GROUP_ID, now],
-        ).map_err(|e| e.to_string())?;
-        let interrupted_local: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM tasks WHERE notion_id IS NULL AND group_id = ?1)",
-            params![NOTION_GROUP_ID], |row| row.get(0),
-        ).map_err(|e| e.to_string())?;
-        if interrupted_local {
+            let now = chrono::Utc::now().timestamp_millis();
             tx.execute(
                 "INSERT OR IGNORE INTO groups(id, name, kind, position, created_at)
-                 VALUES('demo-migrated', '示例计划', 'local', 1, ?1)",
-                params![now],
+                 VALUES(?1, '来自 Notion', 'notion', 0, ?2)",
+                params![NOTION_GROUP_ID, now],
             ).map_err(|e| e.to_string())?;
             tx.execute(
-                "UPDATE tasks SET group_id = 'demo-migrated'
-                 WHERE notion_id IS NULL AND group_id = ?1",
-                params![NOTION_GROUP_ID],
+                "INSERT OR IGNORE INTO groups(id, name, kind, position, created_at)
+                 VALUES(?1, 'Archive', 'archive', 0, ?2)",
+                params![ARCHIVE_GROUP_ID, now],
             ).map_err(|e| e.to_string())?;
+            let interrupted_local: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM tasks WHERE notion_id IS NULL AND group_id = ?1)",
+                params![NOTION_GROUP_ID], |row| row.get(0),
+            ).map_err(|e| e.to_string())?;
+            if interrupted_local {
+                tx.execute(
+                    "INSERT OR IGNORE INTO groups(id, name, kind, position, created_at)
+                     VALUES('demo-migrated', '示例计划', 'local', 1, ?1)",
+                    params![now],
+                ).map_err(|e| e.to_string())?;
+                tx.execute(
+                    "UPDATE tasks SET group_id = 'demo-migrated'
+                     WHERE notion_id IS NULL AND group_id = ?1",
+                    params![NOTION_GROUP_ID],
+                ).map_err(|e| e.to_string())?;
+            }
+            Self::migrate_pending(&tx)?;
+            Self::archive_completed_local_tasks(&tx)?;
+            tx.execute_batch("DROP TABLE IF EXISTS sync_log;")
+                .map_err(|e| e.to_string())?;
         }
-        Self::migrate_pending(&tx)?;
-        Self::archive_completed_local_tasks(&tx)?;
-        tx.execute_batch("DROP TABLE IF EXISTS sync_log; PRAGMA user_version = 1;")
-            .map_err(|e| e.to_string())?;
+
+        if version < 2 {
+            let has_position: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('tasks') WHERE name = 'position')",
+                [], |row| row.get(0),
+            ).map_err(|e| e.to_string())?;
+            if !has_position {
+                tx.execute_batch("ALTER TABLE tasks ADD COLUMN position INTEGER NOT NULL DEFAULT 0")
+                    .map_err(|e| e.to_string())?;
+            }
+            tx.execute_batch("PRAGMA user_version = 2;")
+                .map_err(|e| e.to_string())?;
+        }
         tx.commit().map_err(|e| e.to_string())
     }
 
@@ -558,9 +575,9 @@ impl Database {
     fn tasks_on(conn: &Connection, notion_only: bool) -> Result<Vec<Task>, String> {
         let mut stmt = conn
             .prepare(
-                "SELECT id, notion_id, title, completed, progress, remain, date, tags, updated_time, group_id
+                "SELECT id, notion_id, title, completed, progress, remain, date, tags, updated_time, group_id, position
                  FROM tasks WHERE (?1 = 0 OR group_id = 'notion')
-                 ORDER BY completed ASC, updated_time DESC, rowid ASC",
+                 ORDER BY completed ASC, CASE WHEN position > 0 THEN 0 ELSE 1 END ASC, position ASC, updated_time DESC, rowid ASC",
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt
@@ -701,7 +718,7 @@ impl Database {
 
     fn task_on(conn: &Connection, id: &str) -> Result<Option<Task>, String> {
         conn.query_row(
-            "SELECT id, notion_id, title, completed, progress, remain, date, tags, updated_time, group_id
+            "SELECT id, notion_id, title, completed, progress, remain, date, tags, updated_time, group_id, position
              FROM tasks WHERE id = ?1",
             params![id],
             Self::task_from_row,
@@ -723,6 +740,7 @@ impl Database {
             tags: serde_json::from_str(&tags_raw).unwrap_or_default(),
             updated_time: row.get(8)?,
             group_id: row.get(9)?,
+            position: row.get(10)?,
         })
     }
 
@@ -927,6 +945,102 @@ impl Database {
         Ok(deleted)
     }
 
+    fn validate_permutation(existing: &[String], ordered: &[String], mismatch_msg: &str) -> Result<(), String> {
+        if existing.len() != ordered.len() {
+            return Err(mismatch_msg.into());
+        }
+        let expected: HashSet<&str> = existing.iter().map(String::as_str).collect();
+        let mut seen = HashSet::with_capacity(ordered.len());
+        for id in ordered {
+            if !expected.contains(id.as_str()) || !seen.insert(id.as_str()) {
+                return Err(mismatch_msg.into());
+            }
+        }
+        Ok(())
+    }
+
+    /// Persist user-defined ordering of custom local groups (Notion stays top, Archive stays bottom).
+    pub fn reorder_groups(&self, ordered_ids: Vec<String>) -> Result<Vec<Group>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        let existing = {
+            let mut stmt = tx
+                .prepare("SELECT id FROM groups WHERE kind = 'local' ORDER BY position ASC, created_at ASC")
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(|e| e.to_string())?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?
+        };
+        Self::validate_permutation(
+            &existing,
+            &ordered_ids,
+            crate::language::text(
+                "Group order must contain every custom group exactly once.",
+                "分组顺序必须包含且仅包含所有自定义分组。",
+            ),
+        )?;
+        for (index, id) in ordered_ids.iter().enumerate() {
+            tx.execute(
+                "UPDATE groups SET position = ?1 WHERE id = ?2 AND kind = 'local'",
+                params![index as i64 + 1, id],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        let groups = Self::groups_on(&tx)?;
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(groups)
+    }
+
+    /// Persist user-defined task ordering inside a custom local group.
+    pub fn reorder_tasks(&self, group_id: &str, ordered_ids: Vec<String>) -> Result<Vec<Task>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        let kind: Option<String> = tx
+            .query_row("SELECT kind FROM groups WHERE id = ?1", params![group_id], |row| row.get(0))
+            .optional()
+            .map_err(|e| e.to_string())?;
+        match kind.as_deref() {
+            Some("local") => {}
+            Some("archive") => {
+                return Err(crate::language::text("Archive tasks cannot be reordered.", "归档中的任务不支持调整顺序。").into());
+            }
+            Some(_) => {
+                return Err(crate::language::text("Notion tasks cannot be reordered.", "Notion 分组任务不支持调整顺序。").into());
+            }
+            None => {
+                return Err(crate::language::text("The group no longer exists.", "分组不存在").into());
+            }
+        }
+        let existing = {
+            let mut stmt = tx
+                .prepare("SELECT id FROM tasks WHERE group_id = ?1")
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map(params![group_id], |row| row.get::<_, String>(0))
+                .map_err(|e| e.to_string())?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?
+        };
+        Self::validate_permutation(
+            &existing,
+            &ordered_ids,
+            crate::language::text(
+                "Task order must contain every task in the group exactly once.",
+                "任务顺序必须包含且仅包含该分组中的所有任务。",
+            ),
+        )?;
+        for (index, id) in ordered_ids.iter().enumerate() {
+            tx.execute(
+                "UPDATE tasks SET position = ?1 WHERE id = ?2 AND group_id = ?3",
+                params![index as i64 + 1, id, group_id],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        let tasks = Self::tasks_on(&tx, false)?;
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(tasks)
+    }
+
     // ---- Local (user) tasks ----
 
 
@@ -967,13 +1081,20 @@ impl Database {
             (None, Some(name)) => Self::insert_group(&tx, name)?,
             _ => return Err(crate::language::text("Choose an existing group or enter a new group name.", "请选择一个已有分组，或填写新分组名称").into()),
         };
+        let max_pos: i64 = tx
+            .query_row(
+                "SELECT COALESCE(MAX(position), 0) FROM tasks WHERE group_id = ?1",
+                params![group.id],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
         let now = chrono::Utc::now().timestamp_millis();
         let batch = Self::nanos();
         let mut tasks = Vec::with_capacity(titles.len());
         {
             let mut insert = tx.prepare(
-                "INSERT INTO tasks(id, notion_id, title, completed, progress, remain, date, tags, updated_time, group_id)
-                 VALUES(?1, NULL, ?2, 0, NULL, NULL, NULL, '[]', ?3, ?4)",
+                "INSERT INTO tasks(id, notion_id, title, completed, progress, remain, date, tags, updated_time, group_id, position)
+                 VALUES(?1, NULL, ?2, 0, NULL, NULL, NULL, '[]', ?3, ?4, ?5)",
             ).map_err(|e| e.to_string())?;
             for (index, mut title) in titles.into_iter().enumerate() {
                 // Reuse the title buffers received over IPC instead of copying the batch.
@@ -982,7 +1103,8 @@ impl Database {
                 let start = title.len() - title.trim_start().len();
                 title.drain(..start);
                 let id = format!("t-{batch}-{index}");
-                insert.execute(params![id, title, now, group.id]).map_err(|e| e.to_string())?;
+                let position = if max_pos > 0 { max_pos + index as i64 + 1 } else { 0 };
+                insert.execute(params![id, title, now, group.id, position]).map_err(|e| e.to_string())?;
                 tasks.push(Task {
                     id,
                     notion_id: None,
@@ -994,6 +1116,7 @@ impl Database {
                     tags: Vec::new(),
                     updated_time: now,
                     group_id: group.id.clone(),
+                    position,
                 });
             }
         }
@@ -1182,6 +1305,7 @@ mod tests {
             tags: vec![],
             updated_time: 1,
             group_id: NOTION_GROUP_ID.into(),
+            position: 0,
         }
     }
 
@@ -1376,6 +1500,7 @@ mod tests {
             tags: vec![],
             updated_time: 1,
             group_id: NOTION_GROUP_ID.into(),
+            position: 0,
         };
         merge(&db, &[remote]);
 
@@ -1846,7 +1971,7 @@ mod tests {
         assert_eq!(db.toggle_task("legitimate-done").unwrap().group_id, "user-group");
         assert_eq!(db.get_task("remote").unwrap().unwrap().group_id, NOTION_GROUP_ID);
         let conn = db.conn.lock().unwrap();
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0)).unwrap(), 1);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0)).unwrap(), 2);
         assert_eq!(conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE name = 'sync_log'", [],
             |row| row.get::<_, i64>(0)).unwrap(), 0);
     }
@@ -2197,5 +2322,142 @@ mod tests {
         assert!(db.load_or_migrate_window_state(&[], &fallback).is_err());
         assert_eq!(db.get_setting("edge_dock").unwrap().as_deref(), Some(legacy_dock()));
         assert_eq!(db.load_window_state().unwrap(), None);
+    }
+
+    #[test]
+    fn reorder_groups_persists_local_order_and_rejects_fixed_or_mismatched_ids() {
+        let db = test_db();
+        let a = db.create_group("A").unwrap();
+        let b = db.create_group("B").unwrap();
+        let c = db.create_group("C").unwrap();
+
+        assert!(db.reorder_groups(vec![NOTION_GROUP_ID.into(), a.id.clone(), b.id.clone(), c.id.clone()]).is_err());
+        assert!(db.reorder_groups(vec![a.id.clone(), b.id.clone()]).is_err());
+        assert!(db.reorder_groups(vec![a.id.clone(), a.id.clone(), c.id.clone()]).is_err());
+
+        let reordered = db.reorder_groups(vec![c.id.clone(), a.id.clone(), b.id.clone()]).unwrap();
+        let ids: Vec<_> = reordered.iter().map(|g| g.id.as_str()).collect();
+        assert_eq!(ids, vec![NOTION_GROUP_ID, c.id.as_str(), a.id.as_str(), b.id.as_str(), ARCHIVE_GROUP_ID]);
+        let reloaded: Vec<_> = db.list_groups().unwrap().into_iter().map(|g| g.id).collect();
+        assert_eq!(reloaded, vec![NOTION_GROUP_ID, &c.id, &a.id, &b.id, ARCHIVE_GROUP_ID]);
+    }
+
+    #[test]
+    fn reorder_tasks_persists_order_appends_new_imports_and_rejects_fixed_groups() {
+        let db = test_db();
+        let g = db.create_group("Work").unwrap();
+        let imported = db
+            .import_local_tasks(vec!["One".into(), "Two".into(), "Three".into()], Some(&g.id), None)
+            .unwrap()
+            .tasks;
+        let ids: Vec<_> = imported.iter().map(|t| t.id.clone()).collect();
+
+        assert!(db.reorder_tasks(NOTION_GROUP_ID, vec![]).is_err());
+        assert!(db.reorder_tasks(ARCHIVE_GROUP_ID, vec![]).is_err());
+        assert!(db.reorder_tasks(&g.id, vec![ids[0].clone(), ids[1].clone()]).is_err());
+        assert!(db.reorder_tasks(&g.id, vec![ids[0].clone(), ids[0].clone(), ids[2].clone()]).is_err());
+
+        let tasks = db
+            .reorder_tasks(&g.id, vec![ids[2].clone(), ids[0].clone(), ids[1].clone()])
+            .unwrap();
+        let ordered_titles: Vec<_> = tasks.iter().filter(|t| t.group_id == g.id).map(|t| t.title.as_str()).collect();
+        assert_eq!(ordered_titles, vec!["Three", "One", "Two"]);
+
+        let appended = db
+            .import_local_tasks(vec!["Four".into()], Some(&g.id), None)
+            .unwrap()
+            .tasks;
+        assert_eq!(appended[0].position, 4);
+        let final_titles: Vec<_> = db
+            .list_tasks()
+            .unwrap()
+            .into_iter()
+            .filter(|t| t.group_id == g.id)
+            .map(|t| t.title)
+            .collect();
+        assert_eq!(final_titles, vec!["Three", "One", "Two", "Four"]);
+    }
+
+    #[test]
+    fn migrates_v1_database_without_position_column_preserving_tasks_and_groups() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE tasks (
+                id TEXT PRIMARY KEY,
+                notion_id TEXT,
+                title TEXT NOT NULL,
+                completed INTEGER NOT NULL DEFAULT 0,
+                progress TEXT,
+                remain TEXT,
+                date TEXT,
+                tags TEXT NOT NULL DEFAULT '[]',
+                updated_time INTEGER NOT NULL,
+                group_id TEXT NOT NULL DEFAULT 'notion',
+                archive_source_group_id TEXT
+             );
+             CREATE TABLE settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+             );
+             CREATE TABLE groups (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                kind TEXT NOT NULL DEFAULT 'local',
+                position INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL
+             );
+             CREATE TABLE pending_ops (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                revision INTEGER NOT NULL,
+                task_id TEXT NOT NULL,
+                completed INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                database_id TEXT,
+                page_id TEXT,
+                mapping TEXT,
+                source_verified INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(database_id, page_id)
+             );
+             INSERT INTO groups(id, name, kind, position, created_at) VALUES
+                ('notion', '来自 Notion', 'notion', 0, 100),
+                ('g1', '待办', 'local', 1, 101),
+                ('g2', 'MISC', 'local', 2, 102),
+                ('archive', 'Archive', 'archive', 0, 103);
+             INSERT INTO tasks(id, notion_id, title, completed, updated_time, group_id) VALUES
+                ('n1', 'page-1', 'Notion task', 0, 200, 'notion'),
+                ('t1', NULL, 'First', 0, 201, 'g1'),
+                ('t2', NULL, 'Second', 0, 202, 'g1'),
+                ('t3', NULL, 'Misc item', 0, 203, 'g2');
+             PRAGMA user_version = 1;",
+        ).unwrap();
+        let db = Database { conn: Mutex::new(conn) };
+        db.migrate().unwrap();
+
+        assert_eq!(
+            db.conn.lock().unwrap().query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0)).unwrap(),
+            2
+        );
+        let view = db.task_view().unwrap();
+        let group_ids: Vec<_> = view.groups.iter().map(|g| g.id.as_str()).collect();
+        assert_eq!(group_ids, vec![NOTION_GROUP_ID, "g1", "g2", ARCHIVE_GROUP_ID]);
+        let g1_tasks: Vec<_> = view.tasks.iter().filter(|t| t.group_id == "g1").collect();
+        assert_eq!(g1_tasks.len(), 2);
+        assert!(g1_tasks.iter().all(|t| t.position == 0));
+
+        let reordered_tasks = db.reorder_tasks("g1", vec!["t1".into(), "t2".into()]).unwrap();
+        let g1_titles: Vec<_> = reordered_tasks
+            .iter()
+            .filter(|t| t.group_id == "g1")
+            .map(|t| t.title.as_str())
+            .collect();
+        assert_eq!(g1_titles, vec!["First", "Second"]);
+
+        let reordered_groups = db.reorder_groups(vec!["g2".into(), "g1".into()]).unwrap();
+        let reordered_group_ids: Vec<_> = reordered_groups.iter().map(|g| g.id.as_str()).collect();
+        assert_eq!(reordered_group_ids, vec![NOTION_GROUP_ID, "g2", "g1", ARCHIVE_GROUP_ID]);
+
+        // Newer schema versions (e.g. v3) must be rejected cleanly.
+        db.conn.lock().unwrap().execute_batch("PRAGMA user_version = 3;").unwrap();
+        assert!(db.migrate().is_err());
     }
 }

@@ -1,9 +1,10 @@
 import { useLocale } from "../stores/languageStore";
-import { memo, useEffect, useMemo, useRef } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import { TaskItem } from "./TaskItem";
 import { useTaskStore } from "../stores/taskStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import { isNotionConfigured, type Group, type Task } from "../types";
+import { useSortableList, type SortableItemProps } from "./useSortableList";
 
 interface Props {
   onAddTasks: (groupId: string) => void;
@@ -51,9 +52,19 @@ function NotionEmpty() {
 interface SectionProps extends Props {
   group: Group;
   tasks: Task[];
+  canDragGroup?: boolean;
+  sortable?: SortableItemProps;
 }
 
-const TaskGroup = memo(function TaskGroup({ group, tasks, onAddTasks, onConfirmGroup, onConfirmTask }: SectionProps) {
+const TaskGroup = memo(function TaskGroup({
+  group,
+  tasks,
+  onAddTasks,
+  onConfirmGroup,
+  onConfirmTask,
+  canDragGroup = false,
+  sortable,
+}: SectionProps) {
   const l = useLocale();
   const groupName = group.kind === "notion" ? l.t("来自 Notion") : group.kind === "archive" ? l.t("归档") : group.name;
   const isLocal = group.kind === "local";
@@ -62,10 +73,60 @@ const TaskGroup = memo(function TaskGroup({ group, tasks, onAddTasks, onConfirmG
   const busy = useTaskStore((s) => Boolean(s.busyGroups[group.id]));
   const clearingArchive = useTaskStore((s) => isArchive && s.clearingArchive);
   const notionConfigured = useSettingsStore((s) => group.kind === "notion" && isNotionConfigured(s.savedNotion));
+  const reorderTasks = useTaskStore((s) => s.reorderTasks);
+
+  const taskIds = useMemo(() => tasks.map((task) => task.id), [tasks]);
+  const canDragTasks = isLocal && tasks.length >= 2;
+  const handleReorderTasks = useCallback(
+    (nextIds: string[]) => {
+      void reorderTasks(group.id, nextIds);
+    },
+    [group.id, reorderTasks],
+  );
+  const taskSortable = useSortableList({
+    ids: taskIds,
+    disabled: !canDragTasks || busy || Boolean(pending),
+    liftScale: 1.022,
+    onReorder: handleReorderTasks,
+  });
+
+  const canDragThisGroup = isLocal && canDragGroup && !busy && !pending;
+  const sectionClass = [
+    "group",
+    canDragThisGroup ? "is-draggable-group" : "",
+    sortable?.className ?? "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
-    <section className="group" aria-label={groupName}>
-      <header className="group-header">
+    <section
+      ref={sortable?.ref}
+      style={sortable?.style}
+      className={sectionClass}
+      data-drag-active={sortable?.["data-drag-active"]}
+      aria-label={groupName}
+    >
+      <header
+        className={`group-header${canDragThisGroup ? " is-draggable" : ""}`}
+        onPointerDown={canDragThisGroup ? sortable?.onPointerDown : undefined}
+      >
+        {isLocal && canDragGroup && (
+          <span
+            className="drag-handle group-drag-handle"
+            aria-hidden="true"
+            title={l.t("拖动调整分组顺序")}
+          >
+            <svg viewBox="0 0 12 16" aria-hidden="true">
+              <circle cx="3.5" cy="3.5" r="1.15" />
+              <circle cx="8.5" cy="3.5" r="1.15" />
+              <circle cx="3.5" cy="8" r="1.15" />
+              <circle cx="8.5" cy="8" r="1.15" />
+              <circle cx="3.5" cy="12.5" r="1.15" />
+              <circle cx="8.5" cy="12.5" r="1.15" />
+            </svg>
+          </span>
+        )}
         <span className={`group-badge group-badge-${group.kind}`} aria-hidden>
           {group.kind === "notion" ? "N" : isArchive ? "A" : "L"}
         </span>
@@ -103,7 +164,7 @@ const TaskGroup = memo(function TaskGroup({ group, tasks, onAddTasks, onConfirmG
       {group.kind === "notion" && !notionConfigured && tasks.length > 0 && (
         <p className="group-empty" role="status">{l.t("请先在设置中配置 Notion；已有缓存仍保留。")}</p>
       )}
-      <div className="group-tasks">
+      <div className="group-tasks" data-sorting={taskSortable.isSorting ? "true" : undefined}>
         {tasks.length === 0 ? (
           group.kind === "notion" ? <NotionEmpty /> : (
             <div className="group-empty">
@@ -112,7 +173,13 @@ const TaskGroup = memo(function TaskGroup({ group, tasks, onAddTasks, onConfirmG
             </div>
           )
         ) : tasks.map((task) => (
-          <TaskItem key={task.id} task={task} onDelete={isLocal || isArchive ? onConfirmTask : undefined} />
+          <TaskItem
+            key={task.id}
+            task={task}
+            onDelete={isLocal || isArchive ? onConfirmTask : undefined}
+            canDrag={canDragTasks}
+            sortable={canDragTasks ? taskSortable.getItemProps(task.id) : undefined}
+          />
         ))}
       </div>
     </section>
@@ -122,6 +189,8 @@ const TaskGroup = memo(function TaskGroup({ group, tasks, onAddTasks, onConfirmG
 export const TaskGroups = memo(function TaskGroups({ onAddTasks, onConfirmGroup, onConfirmTask }: Props) {
   const tasks = useTaskStore((s) => s.tasks);
   const groups = useTaskStore((s) => s.groups);
+  const hasPendingGroup = useTaskStore((s) => Object.keys(s.pendingGroups).length > 0);
+  const reorderGroups = useTaskStore((s) => s.reorderGroups);
   const previousIndex = useRef<TaskIndex | null>(null);
   const taskIndex = useMemo(() => indexTasks(tasks, previousIndex.current ?? new Map()), [tasks]);
   useEffect(() => { previousIndex.current = taskIndex; }, [taskIndex]);
@@ -130,14 +199,66 @@ export const TaskGroups = memo(function TaskGroups({ onAddTasks, onConfirmGroup,
     return [...groups].sort((a, b) => rank(a) - rank(b) || a.position - b.position);
   }, [groups]);
 
-  return orderedGroups.map((group) => (
-    <TaskGroup
-      key={group.id}
-      group={group}
-      tasks={taskIndex.get(group.id) ?? EMPTY_TASKS}
-      onAddTasks={onAddTasks}
-      onConfirmGroup={onConfirmGroup}
-      onConfirmTask={onConfirmTask}
-    />
-  ));
+  const notionGroups = useMemo(() => orderedGroups.filter((g) => g.kind === "notion"), [orderedGroups]);
+  const localGroups = useMemo(() => orderedGroups.filter((g) => g.kind === "local"), [orderedGroups]);
+  const archiveGroups = useMemo(() => orderedGroups.filter((g) => g.kind === "archive"), [orderedGroups]);
+
+  const localGroupIds = useMemo(() => localGroups.map((g) => g.id), [localGroups]);
+  const canDragGroups = localGroups.length >= 2;
+  const handleReorderGroups = useCallback(
+    (nextIds: string[]) => {
+      void reorderGroups(nextIds);
+    },
+    [reorderGroups],
+  );
+  const groupSortable = useSortableList({
+    ids: localGroupIds,
+    disabled: !canDragGroups || hasPendingGroup,
+    liftScale: 1.012,
+    onReorder: handleReorderGroups,
+  });
+
+  return (
+    <>
+      {notionGroups.map((group) => (
+        <TaskGroup
+          key={group.id}
+          group={group}
+          tasks={taskIndex.get(group.id) ?? EMPTY_TASKS}
+          onAddTasks={onAddTasks}
+          onConfirmGroup={onConfirmGroup}
+          onConfirmTask={onConfirmTask}
+        />
+      ))}
+      {localGroups.length > 0 && (
+        <div
+          className="group-sortable-list"
+          data-sorting={groupSortable.isSorting ? "true" : undefined}
+        >
+          {localGroups.map((group) => (
+            <TaskGroup
+              key={group.id}
+              group={group}
+              tasks={taskIndex.get(group.id) ?? EMPTY_TASKS}
+              onAddTasks={onAddTasks}
+              onConfirmGroup={onConfirmGroup}
+              onConfirmTask={onConfirmTask}
+              canDragGroup={canDragGroups}
+              sortable={canDragGroups ? groupSortable.getItemProps(group.id) : undefined}
+            />
+          ))}
+        </div>
+      )}
+      {archiveGroups.map((group) => (
+        <TaskGroup
+          key={group.id}
+          group={group}
+          tasks={taskIndex.get(group.id) ?? EMPTY_TASKS}
+          onAddTasks={onAddTasks}
+          onConfirmGroup={onConfirmGroup}
+          onConfirmTask={onConfirmTask}
+        />
+      ))}
+    </>
+  );
 });

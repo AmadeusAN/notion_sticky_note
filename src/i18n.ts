@@ -103,6 +103,7 @@ const english = {
   "新建任务": "New task",
   "清空 Archive 中的任务": "Clear archived tasks",
   "删除分组「{name}」": "Delete group “{name}”",
+  "拖动调整分组顺序": "Drag to reorder group",
   "请先在设置中配置 Notion；已有缓存仍保留。": "Configure Notion in Settings first. Cached tasks are kept.",
   "已完成的本地任务会移到这里，由你决定何时清空。": "Completed local tasks move here. You decide when to clear them.",
   "还没有任务，点右上 ＋ 新建。": "No tasks yet. Use + above to create one.",

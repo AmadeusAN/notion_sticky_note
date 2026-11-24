@@ -3,7 +3,8 @@ import type { Group, SyncState, Task, TaskView } from "../types";
 import { ARCHIVE_GROUP_ID, NOTION_GROUP_ID } from "../types";
 import {
   apiClearArchive, apiCreateGroup, apiDeleteGroup, apiDeleteTask, apiForceSync,
-  apiGetSyncState, apiGetTaskView, apiImportTasks, apiListenSyncState, apiToggleTask,
+  apiGetSyncState, apiGetTaskView, apiImportTasks, apiListenSyncState,
+  apiReorderGroups, apiReorderTasks, apiToggleTask,
 } from "../services/tauriApi";
 
 interface OperationError {
@@ -31,6 +32,8 @@ interface TaskState {
   dismissOperationError: () => void;
   createGroup: (name: string) => Promise<Group>;
   deleteGroup: (id: string) => Promise<void>;
+  reorderGroups: (orderedIds: string[]) => Promise<void>;
+  reorderTasks: (groupId: string, orderedIds: string[]) => Promise<void>;
   importTasks: (titles: string[], groupId: string | null, newGroupName: string | null) => Promise<void>;
   deleteTask: (id: string) => Promise<void>;
   toggleTask: (id: string) => Promise<void>;
@@ -51,6 +54,7 @@ function sameTask(a: Task, b: Task): boolean {
   return a.id === b.id && a.notionId === b.notionId && a.title === b.title &&
     a.completed === b.completed && a.progress === b.progress && a.remain === b.remain &&
     a.date === b.date && a.updatedTime === b.updatedTime && a.groupId === b.groupId &&
+    (a.position ?? 0) === (b.position ?? 0) &&
     a.tags.length === b.tags.length && a.tags.every((tag, index) => tag === b.tags[index]);
 }
 
@@ -69,7 +73,17 @@ function reconcile<T extends { id: string }>(previous: T[], incoming: T[], same:
 }
 
 function orderedTasks(tasks: Task[]): Task[] {
-  return tasks.sort((a, b) => Number(a.completed) - Number(b.completed) || b.updatedTime - a.updatedTime);
+  return tasks.sort((a, b) => {
+    const doneDiff = Number(a.completed) - Number(b.completed);
+    if (doneDiff !== 0) return doneDiff;
+    const ap = a.position ?? 0;
+    const bp = b.position ?? 0;
+    const aOrdered = ap > 0 ? 0 : 1;
+    const bOrdered = bp > 0 ? 0 : 1;
+    if (aOrdered !== bOrdered) return aOrdered - bOrdered;
+    if (ap !== bp) return ap - bp;
+    return b.updatedTime - a.updatedTime;
+  });
 }
 
 export function createTaskStore() {
@@ -250,6 +264,64 @@ export function createTaskStore() {
           }));
         } catch (error) { report(key, error, () => get().deleteGroup(id)); throw error; }
         finally { finishGroup(id); end([id]); }
+      },
+
+      reorderGroups: async (orderedIds) => {
+        if (orderedIds.length < 2) return;
+        for (const id of orderedIds) writable(id);
+        const key = "reorder-groups";
+        const previousGroups = get().groups;
+        const posById = new Map(orderedIds.map((id, index) => [id, index + 1]));
+        const rank = (group: Group) => (group.kind === "notion" ? 0 : group.kind === "archive" ? 2 : 1);
+        const optimistic = previousGroups
+          .map((group) => {
+            const pos = posById.get(group.id);
+            return pos != null && group.kind === "local" ? { ...group, position: pos } : group;
+          })
+          .sort((a, b) => rank(a) - rank(b) || a.position - b.position || a.createdAt - b.createdAt);
+        begin(key, orderedIds);
+        set({ groups: optimistic });
+        try {
+          const persisted = await apiReorderGroups(orderedIds);
+          if (persisted) {
+            set((state) => ({ groups: reconcile(state.groups, persisted, sameGroup) }));
+          }
+        } catch (error) {
+          set({ groups: previousGroups });
+          report(key, error, () => get().reorderGroups(orderedIds));
+          throw error;
+        } finally {
+          end(orderedIds);
+        }
+      },
+
+      reorderTasks: async (groupId, orderedIds) => {
+        writable(groupId);
+        if (orderedIds.length < 2) return;
+        const key = `reorder-tasks:${groupId}`;
+        const previousTasks = get().tasks;
+        const posById = new Map(orderedIds.map((id, index) => [id, index + 1]));
+        const optimistic = orderedTasks(
+          previousTasks.map((task) => {
+            if (task.groupId !== groupId) return task;
+            const pos = posById.get(task.id);
+            return pos != null ? { ...task, position: pos } : task;
+          }),
+        );
+        begin(key, [groupId]);
+        set({ tasks: optimistic });
+        try {
+          const persisted = await apiReorderTasks(groupId, orderedIds);
+          if (persisted) {
+            set((state) => ({ tasks: reconcile(state.tasks, persisted, sameTask) }));
+          }
+        } catch (error) {
+          set({ tasks: previousTasks });
+          report(key, error, () => get().reorderTasks(groupId, orderedIds));
+          throw error;
+        } finally {
+          end([groupId]);
+        }
       },
 
       deleteTask: async (id) => {

@@ -20,6 +20,7 @@ export interface Task {
   updatedTime: number;
   /** Owning group id; synced Notion rows live in NOTION_GROUP_ID. */
   groupId: string;
+  position?: number;
 }
 
 export interface TaskView {

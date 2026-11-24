@@ -15,6 +15,8 @@ pub struct Task {
     /// Owning group id. Synced Notion rows live in the pinned `notion` group.
     #[serde(default = "notion_group_id")]
     pub group_id: String,
+    #[serde(default)]
+    pub position: i64,
 }
 
 /// Pinned group id that receives every row synced from Notion.
@@ -387,6 +389,7 @@ pub fn mock_tasks() -> Vec<Task> {
             tags: vec!["research".into()],
             updated_time: now,
             group_id: NOTION_GROUP_ID.into(),
+            position: 0,
         },
         Task {
             id: "local-2".into(),
@@ -399,6 +402,7 @@ pub fn mock_tasks() -> Vec<Task> {
             tags: vec!["setup".into()],
             updated_time: now,
             group_id: NOTION_GROUP_ID.into(),
+            position: 0,
         },
         Task {
             id: "local-3".into(),
@@ -411,6 +415,7 @@ pub fn mock_tasks() -> Vec<Task> {
             tags: vec!["ui".into()],
             updated_time: now,
             group_id: NOTION_GROUP_ID.into(),
+            position: 0,
         },
     ]
 }

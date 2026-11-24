@@ -633,8 +633,16 @@ html[data-dock-phase="collapsed"][data-surface="motion"] .app-shell {
   gap: 2px;
 }
 
-.group + .group {
+.group + .group,
+.group + .group-sortable-list,
+.group-sortable-list + .group {
   margin-top: 14px;
+}
+
+.group-sortable-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .group-header {
@@ -809,6 +817,142 @@ html[data-dock-phase="collapsed"][data-surface="motion"] .app-shell {
 .task-del:hover {
   background: rgba(196, 92, 38, 0.14);
   color: #c45c26;
+}
+
+/* Apple-style Sortable Drag & Drop ------------------------------------- */
+body.is-sorting-pointer,
+body.is-sorting-pointer * {
+  cursor: grabbing !important;
+  user-select: none !important;
+}
+
+.drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 18px;
+  flex-shrink: 0;
+  color: var(--note-muted);
+  opacity: 0.24;
+  transition: opacity 150ms cubic-bezier(0.22, 1, 0.36, 1), color 150ms ease, transform 150ms ease;
+  pointer-events: auto;
+}
+
+.drag-handle svg {
+  width: 10px;
+  height: 14px;
+  fill: currentColor;
+  pointer-events: none;
+}
+
+.group-drag-handle {
+  margin-left: -2px;
+}
+
+.group-header.is-draggable {
+  cursor: grab;
+  border-radius: 10px;
+  transition: background 140ms ease;
+}
+
+.group-header.is-draggable:hover {
+  background: color-mix(in srgb, var(--note-fg) 4%, transparent);
+}
+
+.group-header.is-draggable:hover .group-drag-handle,
+.group.is-dragging .group-drag-handle {
+  opacity: 0.85;
+  color: var(--note-fg);
+}
+
+.task-item.is-draggable {
+  cursor: grab;
+}
+
+[data-sorting="true"] > .sortable-item {
+  transition:
+    transform 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 180ms ease,
+    background 180ms ease,
+    outline-color 180ms ease,
+    opacity 180ms ease;
+  will-change: transform;
+}
+
+[data-sorting="true"] > .sortable-item.is-dragging {
+  position: relative;
+  z-index: 50;
+  cursor: grabbing;
+  transition:
+    box-shadow 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    background 160ms ease,
+    outline-color 160ms ease;
+}
+
+[data-sorting="true"] > .sortable-item.is-settling {
+  position: relative;
+  z-index: 40;
+  transition:
+    transform 190ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 190ms cubic-bezier(0.22, 1, 0.36, 1),
+    background 190ms ease,
+    outline-color 190ms ease;
+}
+
+.task-item.is-dragging {
+  background: color-mix(in srgb, var(--note-card, var(--note-bg)) 94%, #ffffff);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  outline: 1px solid color-mix(in srgb, var(--note-accent) 30%, transparent);
+  box-shadow:
+    0 14px 28px -6px rgba(15, 20, 30, 0.22),
+    0 4px 10px -2px rgba(15, 20, 30, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.68);
+}
+
+:root[data-mode="dark"] .task-item.is-dragging {
+  background: color-mix(in srgb, var(--note-card, var(--note-bg)) 90%, rgba(255, 255, 255, 0.08));
+  outline: 1px solid color-mix(in srgb, var(--note-accent) 38%, rgba(255, 255, 255, 0.12));
+  box-shadow:
+    0 18px 34px -6px rgba(0, 0, 0, 0.58),
+    0 6px 14px -2px rgba(0, 0, 0, 0.42),
+    inset 0 1px 0 rgba(255, 255, 255, 0.14);
+}
+
+.group.is-dragging {
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--note-card, var(--note-bg)) 92%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  outline: 1px solid color-mix(in srgb, var(--note-accent) 28%, transparent);
+  box-shadow:
+    0 18px 36px -8px rgba(15, 20, 30, 0.24),
+    0 6px 14px -4px rgba(15, 20, 30, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+
+:root[data-mode="dark"] .group.is-dragging {
+  background: color-mix(in srgb, var(--note-card, var(--note-bg)) 92%, rgba(255, 255, 255, 0.05));
+  outline: 1px solid color-mix(in srgb, var(--note-accent) 36%, rgba(255, 255, 255, 0.12));
+  box-shadow:
+    0 22px 42px -8px rgba(0, 0, 0, 0.62),
+    0 8px 16px -4px rgba(0, 0, 0, 0.44),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+.task-item.is-settling,
+.group.is-settling {
+  box-shadow:
+    0 4px 10px -4px rgba(15, 20, 30, 0.12),
+    0 1px 4px -1px rgba(15, 20, 30, 0.08);
+}
+
+:root[data-mode="dark"] .task-item.is-settling,
+:root[data-mode="dark"] .group.is-settling {
+  box-shadow:
+    0 6px 14px -4px rgba(0, 0, 0, 0.36),
+    0 2px 6px -1px rgba(0, 0, 0, 0.24);
 }
 
 /* Composer bottom sheet ---------------------------------------------- */
@@ -1578,6 +1722,10 @@ html[data-dock-phase="collapsed"][data-surface="motion"] .app-shell {
   .task-item {
     content-visibility: auto;
     contain-intrinsic-block-size: auto 56px;
+  }
+
+  [data-sorting="true"] .task-item {
+    content-visibility: visible;
   }
 }
 

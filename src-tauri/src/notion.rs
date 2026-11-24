@@ -328,6 +328,7 @@ fn parse_page(page: &Value, config: &NotionConfig) -> Option<Task> {
         tags,
         updated_time: updated,
         group_id: crate::models::NOTION_GROUP_ID.into(),
+        position: 0,
     })
 }
 

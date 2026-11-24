@@ -4,7 +4,8 @@ import type { Group, SyncState, Task, TaskView } from "../types";
 vi.mock("../services/tauriApi", () => ({
   apiClearArchive: vi.fn(), apiCreateGroup: vi.fn(), apiDeleteGroup: vi.fn(),
   apiDeleteTask: vi.fn(), apiForceSync: vi.fn(), apiGetSyncState: vi.fn(),
-  apiGetTaskView: vi.fn(), apiImportTasks: vi.fn(), apiListenSyncState: vi.fn(), apiToggleTask: vi.fn(),
+  apiGetTaskView: vi.fn(), apiImportTasks: vi.fn(), apiListenSyncState: vi.fn(),
+  apiReorderGroups: vi.fn(), apiReorderTasks: vi.fn(), apiToggleTask: vi.fn(),
 }));
 import * as api from "../services/tauriApi";
 import { createTaskStore } from "./taskStore";
@@ -41,6 +42,8 @@ beforeEach(() => {
   vi.mocked(api.apiDeleteGroup).mockResolvedValue([task.id]);
   vi.mocked(api.apiDeleteTask).mockResolvedValue();
   vi.mocked(api.apiClearArchive).mockResolvedValue([archived.id]);
+  vi.mocked(api.apiReorderGroups).mockResolvedValue(null);
+  vi.mocked(api.apiReorderTasks).mockResolvedValue(null);
 });
 
 describe("coherent task views", () => {
@@ -261,5 +264,33 @@ describe("authoritative sync state", () => {
     expect(store.getState().syncState.lastSuccessfulAt).toBeNull();
     expect(store.getState().syncRequestPending).toBe(false);
     expect(api.apiForceSync).toHaveBeenCalledTimes(1);
+  });
+
+  it("optimistically reorders custom groups and tasks and rolls back on failure", async () => {
+    const secondTask: Task = { ...task, id: "two", title: "Two", updatedTime: 2 };
+    store.setState(view([task, secondTask], [group, otherGroup, archive]));
+
+    const pendingGroups = deferred<Group[] | null>();
+    vi.mocked(api.apiReorderGroups).mockReturnValueOnce(pendingGroups.promise);
+    const groupReorder = store.getState().reorderGroups([otherGroup.id, group.id]);
+    expect(store.getState().groups.map((g) => g.id)).toEqual([otherGroup.id, group.id, archive.id]);
+    pendingGroups.reject(new Error("排序保存失败"));
+    await expect(groupReorder).rejects.toThrow("排序保存失败");
+    expect(store.getState().groups.map((g) => g.id)).toEqual([group.id, otherGroup.id, archive.id]);
+    expect(store.getState().operationError?.message).toBe("排序保存失败");
+
+    const pendingTasks = deferred<Task[] | null>();
+    vi.mocked(api.apiReorderTasks).mockReturnValueOnce(pendingTasks.promise);
+    const taskReorder = store.getState().reorderTasks(group.id, [task.id, secondTask.id]);
+    expect(store.getState().tasks.map((t) => t.id)).toEqual([task.id, secondTask.id]);
+    pendingTasks.resolve([
+      { ...task, position: 1 },
+      { ...secondTask, position: 2 },
+    ]);
+    await taskReorder;
+    expect(store.getState().tasks.map((t) => [t.id, t.position])).toEqual([
+      [task.id, 1],
+      [secondTask.id, 2],
+    ]);
   });
 });

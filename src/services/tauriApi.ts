@@ -33,10 +33,97 @@ export async function apiListenEdgeDock(onState: (state: DockSnapshot) => void):
 
 export async function apiGetTaskView(): Promise<TaskView> {
   if (!isTauri()) {
-    return { tasks: MOCK_TASKS, groups: [
-      { id: NOTION_GROUP_ID, name: "来自 Notion", kind: "notion", position: 0, createdAt: 0 },
-      { id: ARCHIVE_GROUP_ID, name: "Archive", kind: "archive", position: 0, createdAt: 0 },
-    ] };
+    const now = Date.now();
+    const previewTasks: Task[] = [
+      ...MOCK_TASKS,
+      {
+        id: "preview-focus-1",
+        notionId: null,
+        title: "Polish sticky note layout",
+        completed: false,
+        progress: null,
+        remain: null,
+        date: null,
+        tags: [],
+        updatedTime: now - 3000,
+        groupId: "preview-focus",
+        position: 1,
+      },
+      {
+        id: "preview-focus-2",
+        notionId: null,
+        title: "Verify Apple-style drag physics",
+        completed: false,
+        progress: null,
+        remain: null,
+        date: null,
+        tags: [],
+        updatedTime: now - 2000,
+        groupId: "preview-focus",
+        position: 2,
+      },
+      {
+        id: "preview-focus-3",
+        notionId: null,
+        title: "Ship clean SQLite v2 migration",
+        completed: false,
+        progress: null,
+        remain: null,
+        date: null,
+        tags: [],
+        updatedTime: now - 1000,
+        groupId: "preview-focus",
+        position: 3,
+      },
+      {
+        id: "preview-backlog-1",
+        notionId: null,
+        title: "Prepare v0.2.4 release notes",
+        completed: false,
+        progress: null,
+        remain: null,
+        date: null,
+        tags: [],
+        updatedTime: now - 500,
+        groupId: "preview-backlog",
+        position: 1,
+      },
+      {
+        id: "preview-backlog-2",
+        notionId: null,
+        title: "Tidy workspace screenshots",
+        completed: false,
+        progress: null,
+        remain: null,
+        date: null,
+        tags: [],
+        updatedTime: now - 250,
+        groupId: "preview-backlog",
+        position: 2,
+      },
+      {
+        id: "preview-archive-1",
+        notionId: null,
+        title: "Fix Windhawk undock FX glitch",
+        completed: true,
+        progress: null,
+        remain: null,
+        date: null,
+        tags: [],
+        updatedTime: now - 5000,
+        groupId: ARCHIVE_GROUP_ID,
+        position: 1,
+      },
+    ];
+    return {
+      tasks: previewTasks,
+      groups: [
+        { id: NOTION_GROUP_ID, name: "来自 Notion", kind: "notion", position: 0, createdAt: 0 },
+        { id: "preview-focus", name: "Today", kind: "local", position: 1, createdAt: 1 },
+        { id: "preview-backlog", name: "Backlog", kind: "local", position: 2, createdAt: 2 },
+        { id: ARCHIVE_GROUP_ID, name: "Archive", kind: "archive", position: 0, createdAt: 3 },
+      ],
+    };
   }
   return invoke<TaskView>("get_task_view");
 }
@@ -49,6 +136,16 @@ export async function apiCreateGroup(name: string): Promise<Group> {
 export async function apiDeleteGroup(id: string): Promise<string[]> {
   if (!isTauri()) throw new Error("浏览器预览不支持删除分组");
   return invoke<string[]>("delete_group", { id });
+}
+
+export async function apiReorderGroups(orderedIds: string[]): Promise<Group[] | null> {
+  if (!isTauri()) return null;
+  return invoke<Group[]>("reorder_groups", { orderedIds });
+}
+
+export async function apiReorderTasks(groupId: string, orderedIds: string[]): Promise<Task[] | null> {
+  if (!isTauri()) return null;
+  return invoke<Task[]>("reorder_tasks", { groupId, orderedIds });
 }
 
 

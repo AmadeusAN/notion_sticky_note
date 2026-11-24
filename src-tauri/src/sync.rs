@@ -467,7 +467,7 @@ mod tests {
     fn seed(db: &Database) -> Task {
         let task = Task { id: PAGE.into(), notion_id: Some(PAGE.into()), title: "Fixture task".into(),
             completed: false, progress: None, remain: None, date: None, tags: Vec::new(),
-            updated_time: 1, group_id: crate::models::NOTION_GROUP_ID.into() };
+            updated_time: 1, group_id: crate::models::NOTION_GROUP_ID.into(), position: 0 };
         db.merge_notion_snapshot(&[task.clone()], db.notion_context().unwrap().1).unwrap();
         task
     }

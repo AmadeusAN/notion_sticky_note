@@ -137,3 +137,17 @@ it("updates fixed display names across locale changes without changing stored gr
   expect(useTaskStore.getState().tasks).toBe(before.tasks);
   expect(before.groups.find((group) => group.kind === "archive")?.name).toBe("Archive");
 });
+
+it("marks only reorderable custom groups and multi-task local lists as draggable without task grip icons", async () => {
+  expect(section("From Notion").querySelector(".group-drag-handle")).toBeNull();
+  expect(section("Archive").querySelector(".group-drag-handle")).toBeNull();
+  expect(section("Local").querySelector(".group-drag-handle")).not.toBeNull();
+  expect(section("Other").querySelector(".group-drag-handle")).not.toBeNull();
+  expect(section("Local").querySelector(".task-drag-handle")).toBeNull();
+  expect(section("Local").querySelectorAll(".task-item.is-draggable").length).toBe(0);
+
+  const second = { ...task, id: "second", title: "Second task", updatedTime: 2 };
+  await act(async () => useTaskStore.setState({ tasks: [task, second] }));
+  expect(section("Local").querySelector(".task-drag-handle")).toBeNull();
+  expect(section("Local").querySelectorAll(".task-item.is-draggable").length).toBe(2);
+});
