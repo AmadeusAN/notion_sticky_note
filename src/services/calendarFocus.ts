@@ -80,6 +80,10 @@ export interface SmoothLensState {
   frameTopPct: number;
   frameWidthPct: number;
   frameHeightPct: number;
+  maskLeftPct: number;
+  maskRightPct: number;
+  maskTopPct: number;
+  maskBottomPct: number;
   maskCenterXPct: number;
   maskCenterYPct: number;
   maskRadiusXPct: number;
@@ -116,6 +120,13 @@ export function computeSmoothLensState(
   const frameHeightPct = clamp((zoomY / rows) * 2.35 * scale * 100, 28, 86);
   const frameLeftPct = clamp(x * 100 - frameWidthPct / 2, 1.5, 98.5 - frameWidthPct);
   const frameTopPct = clamp(y * 100 - frameHeightPct / 2, 1.5, 98.5 - frameHeightPct);
+  const frameRightPct = frameLeftPct + frameWidthPct;
+  const frameBottomPct = frameTopPct + frameHeightPct;
+
+  const maskLeftPct = frameLeftPct <= 1.6 ? 0 : frameLeftPct;
+  const maskRightPct = frameRightPct >= 98.4 ? 100 : frameRightPct;
+  const maskTopPct = frameTopPct <= 1.6 ? 0 : frameTopPct;
+  const maskBottomPct = frameBottomPct >= 98.4 ? 100 : frameBottomPct;
 
   const maskCenterXPct = frameLeftPct + frameWidthPct / 2;
   const maskCenterYPct = frameTopPct + frameHeightPct / 2;
@@ -129,6 +140,10 @@ export function computeSmoothLensState(
     frameTopPct,
     frameWidthPct,
     frameHeightPct,
+    maskLeftPct,
+    maskRightPct,
+    maskTopPct,
+    maskBottomPct,
     maskCenterXPct,
     maskCenterYPct,
     maskRadiusXPct,

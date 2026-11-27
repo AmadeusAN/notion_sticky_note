@@ -49,16 +49,24 @@ describe("calendarFocus", () => {
     expect(topLeft.tyCanvasPct).toBe(0);
     expect(topLeft.frameLeftPct).toBeGreaterThanOrEqual(1.5);
     expect(topLeft.frameTopPct).toBeGreaterThanOrEqual(1.5);
+    expect(topLeft.maskLeftPct).toBe(0);
+    expect(topLeft.maskTopPct).toBe(0);
 
     const center = computeSmoothLensState(0.5, 0.5, 5, 1.42, 1.38);
     expect(center.maskCenterXPct).toBeCloseTo(50, 2);
     expect(center.maskCenterYPct).toBeCloseTo(50, 2);
+    expect(center.maskLeftPct).toBeCloseTo(center.frameLeftPct, 4);
+    expect(center.maskRightPct).toBeCloseTo(center.frameLeftPct + center.frameWidthPct, 4);
+    expect(center.maskTopPct).toBeCloseTo(center.frameTopPct, 4);
+    expect(center.maskBottomPct).toBeCloseTo(center.frameTopPct + center.frameHeightPct, 4);
 
     const bottomRight = computeSmoothLensState(1, 1, 5, 1.42, 1.38);
     expect(bottomRight.txCanvasPct).toBeCloseTo(((1 - 1.42) / 1.42) * 100, 4);
     expect(bottomRight.tyCanvasPct).toBeCloseTo(((1 - 1.38) / 1.38) * 100, 4);
     expect(bottomRight.frameLeftPct + bottomRight.frameWidthPct).toBeLessThanOrEqual(98.5);
     expect(bottomRight.frameTopPct + bottomRight.frameHeightPct).toBeLessThanOrEqual(98.5);
+    expect(bottomRight.maskRightPct).toBe(100);
+    expect(bottomRight.maskBottomPct).toBe(100);
 
     const compact = computeSmoothLensState(0.5, 0.5, 5, 1.42, 1.38, 0.7);
     const expanded = computeSmoothLensState(0.5, 0.5, 5, 1.42, 1.38, 1.35);

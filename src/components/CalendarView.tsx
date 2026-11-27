@@ -437,10 +437,10 @@ export function CalendarView({
         weekdaysEl.style.transform = `translate3d(${tx}%, 0, 0)`;
       }
       if (maskEl) {
-        maskEl.style.setProperty("--lens-cx", `${s.maskCenterXPct.toFixed(2)}%`);
-        maskEl.style.setProperty("--lens-cy", `${s.maskCenterYPct.toFixed(2)}%`);
-        maskEl.style.setProperty("--lens-rx", `${s.maskRadiusXPct.toFixed(2)}%`);
-        maskEl.style.setProperty("--lens-ry", `${s.maskRadiusYPct.toFixed(2)}%`);
+        maskEl.style.setProperty("--roi-left", `${s.maskLeftPct.toFixed(2)}%`);
+        maskEl.style.setProperty("--roi-right", `${s.maskRightPct.toFixed(2)}%`);
+        maskEl.style.setProperty("--roi-top", `${s.maskTopPct.toFixed(2)}%`);
+        maskEl.style.setProperty("--roi-bottom", `${s.maskBottomPct.toFixed(2)}%`);
       }
       if (roiEl) {
         roiEl.style.left = `${s.frameLeftPct.toFixed(2)}%`;
