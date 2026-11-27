@@ -1,10 +1,13 @@
 import { create } from "zustand";
 import type { CalendarFocusStyle, GalleryFeedConfig, WindowMode } from "../types";
 import {
+  apiGetAlwaysOnTop,
   apiGetWindowMode,
   apiIsMainMaximized,
+  apiListenAlwaysOnTop,
   apiListenWindowMode,
   apiMinimizeMain,
+  apiSetAlwaysOnTop,
   apiSetWindowMode,
   apiToggleMaximizeMain,
 } from "../services/tauriApi";
@@ -113,6 +116,7 @@ function writeSavedGalleryConfig(config: GalleryFeedConfig): void {
 interface ModeState {
   mode: WindowMode;
   maximized: boolean;
+  alwaysOnTop: boolean;
   switching: boolean;
   error: string | null;
   calendarFocusStyle: CalendarFocusStyle;
@@ -121,6 +125,8 @@ interface ModeState {
   lastActiveFocusStyle: "smooth" | "mosaic";
   connectWindowMode: () => () => void;
   setMode: (mode: WindowMode) => Promise<void>;
+  setAlwaysOnTop: (pinned: boolean) => Promise<boolean>;
+  toggleAlwaysOnTop: () => Promise<boolean>;
   toggleMaximize: () => Promise<void>;
   minimize: () => Promise<void>;
   setCalendarFocusStyle: (style: CalendarFocusStyle) => void;
@@ -136,10 +142,12 @@ export function createModeStore() {
   const initialGalleryConfig = readSavedGalleryConfig();
   const initialActiveFocusStyle: "smooth" | "mosaic" =
     initialFocusStyle === "mosaic" ? "mosaic" : "smooth";
+  let pinRevision = 0;
 
   return create<ModeState>((set, get) => ({
     mode: "workspace",
     maximized: false,
+    alwaysOnTop: false,
     switching: false,
     error: null,
     calendarFocusStyle: initialFocusStyle,
@@ -149,27 +157,49 @@ export function createModeStore() {
 
     connectWindowMode: () => {
       let alive = true;
-      let unlisten: (() => void) | null = null;
+      let unlistenMode: (() => void) | null = null;
+      let unlistenPin: (() => void) | null = null;
+      const startPinRevision = pinRevision;
       void (async () => {
         try {
-          const cleanup = await apiListenWindowMode((nextMode) => {
-            if (alive) set({ mode: nextMode, switching: false, error: null });
-          });
+          const [cleanupMode, cleanupPin] = await Promise.all([
+            apiListenWindowMode((nextMode) => {
+              if (alive) set({ mode: nextMode, switching: false, error: null });
+            }),
+            apiListenAlwaysOnTop((pinned) => {
+              pinRevision += 1;
+              if (alive) set({ alwaysOnTop: pinned, error: null });
+            }),
+          ]);
           if (!alive) {
-            cleanup();
+            cleanupMode();
+            cleanupPin();
             return;
           }
-          unlisten = cleanup;
-          const [mode, maximized] = await Promise.all([apiGetWindowMode(), apiIsMainMaximized()]);
-          if (alive) set({ mode, maximized });
+          unlistenMode = cleanupMode;
+          unlistenPin = cleanupPin;
+          const [mode, maximized, alwaysOnTop] = await Promise.all([
+            apiGetWindowMode(),
+            apiIsMainMaximized(),
+            apiGetAlwaysOnTop(),
+          ]);
+          if (alive) {
+            set((state) => ({
+              mode,
+              maximized,
+              alwaysOnTop: pinRevision === startPinRevision ? alwaysOnTop : state.alwaysOnTop,
+            }));
+          }
         } catch (error) {
           if (alive) set({ error: error instanceof Error ? error.message : String(error) });
         }
       })();
       return () => {
         alive = false;
-        unlisten?.();
-        unlisten = null;
+        unlistenMode?.();
+        unlistenPin?.();
+        unlistenMode = null;
+        unlistenPin = null;
       };
     },
 
@@ -186,6 +216,22 @@ export function createModeStore() {
           error: error instanceof Error ? error.message : String(error),
         });
       }
+    },
+
+    setAlwaysOnTop: async (pinned) => {
+      pinRevision += 1;
+      try {
+        const applied = await apiSetAlwaysOnTop(pinned);
+        set({ alwaysOnTop: applied, error: null });
+        return applied;
+      } catch (error) {
+        set({ error: error instanceof Error ? error.message : String(error) });
+        return get().alwaysOnTop;
+      }
+    },
+
+    toggleAlwaysOnTop: async () => {
+      return get().setAlwaysOnTop(!get().alwaysOnTop);
     },
 
     toggleMaximize: async () => {

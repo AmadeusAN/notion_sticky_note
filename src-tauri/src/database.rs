@@ -553,6 +553,17 @@ impl Database {
         self.set_setting("window_mode", value)
     }
 
+    pub fn load_always_on_top(&self) -> Result<bool, String> {
+        Ok(matches!(
+            self.get_setting("always_on_top")?.as_deref(),
+            Some("true")
+        ))
+    }
+
+    pub fn save_always_on_top(&self, pinned: bool) -> Result<(), String> {
+        self.set_setting("always_on_top", if pinned { "true" } else { "false" })
+    }
+
     pub fn load_workspace_geometry(&self) -> Result<Option<WorkspaceGeometry>, String> {
         self.get_setting("workspace_geometry")?
             .map(|raw| {
@@ -3013,5 +3024,11 @@ mod tests {
         assert!(db.save_workspace_geometry(&valid).unwrap());
         assert!(!db.save_workspace_geometry(&valid).unwrap());
         assert_eq!(db.load_workspace_geometry().unwrap(), Some(valid));
+
+        assert!(!db.load_always_on_top().unwrap());
+        db.save_always_on_top(true).unwrap();
+        assert!(db.load_always_on_top().unwrap());
+        db.save_always_on_top(false).unwrap();
+        assert!(!db.load_always_on_top().unwrap());
     }
 }

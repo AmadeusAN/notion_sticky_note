@@ -50,6 +50,7 @@ pub struct AppState {
     pub language: Arc<LanguageManager>,
     pub window_mode: Mutex<WindowMode>,
     pub workspace_geometry: Mutex<Option<WorkspaceGeometry>>,
+    pub always_on_top: Mutex<bool>,
 }
 
 fn db_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -347,6 +348,10 @@ fn current_window_mode(app: &AppHandle) -> WindowMode {
     *app.state::<AppState>().window_mode.lock().unwrap()
 }
 
+fn current_always_on_top(app: &AppHandle) -> bool {
+    *app.state::<AppState>().always_on_top.lock().unwrap()
+}
+
 fn sample_workspace_geometry_into_memory(app: &AppHandle, win: &WebviewWindow) {
     let state = app.state::<AppState>();
     let prev = state.workspace_geometry.lock().unwrap().clone();
@@ -372,13 +377,14 @@ fn switch_window_mode_on_ui(app: &AppHandle, target: WindowMode) -> Result<Windo
     let win = window::main_window(app)?;
     let state = app.state::<AppState>();
 
+    let pinned = current_always_on_top(app);
     match target {
         WindowMode::Workspace => {
             let _ = state.edge_dock.capture_valid_geometry(app, &win);
             state.edge_dock.suspend(app);
             fx_window::hide_fx(app);
             *state.window_mode.lock().unwrap() = WindowMode::Workspace;
-            window::enable_workspace_window_style(&win)?;
+            window::enable_workspace_window_style(&win, pinned)?;
             let saved = state.workspace_geometry.lock().unwrap().clone();
             let applied = window::apply_workspace_geometry(&win, saved.as_ref())?;
             *state.workspace_geometry.lock().unwrap() = Some(applied.clone());
@@ -391,7 +397,7 @@ fn switch_window_mode_on_ui(app: &AppHandle, target: WindowMode) -> Result<Windo
         }
         WindowMode::Sticky => {
             let _ = persist_workspace_geometry(app, &win);
-            window::enable_sticky_window_style(&win)?;
+            window::enable_sticky_window_style(&win, pinned)?;
             *state.window_mode.lock().unwrap() = WindowMode::Sticky;
             state.db.save_window_mode(WindowMode::Sticky)?;
             state.edge_dock.reveal(app, &win)?;
@@ -417,6 +423,37 @@ async fn set_window_mode(mode: WindowMode, app: AppHandle) -> Result<WindowMode,
     .map_err(|error| error.to_string())?;
     receive.await.map_err(|_| {
         language::text("Unable to switch window mode.", "切换窗口形态失败。").to_string()
+    })?
+}
+
+fn apply_always_on_top_on_ui(app: &AppHandle, pinned: bool) -> Result<bool, String> {
+    let win = window::main_window(app)?;
+    let state = app.state::<AppState>();
+    state.db.save_always_on_top(pinned)?;
+    *state.always_on_top.lock().unwrap() = pinned;
+    window::apply_always_on_top(&win, pinned)?;
+    if current_window_mode(app) == WindowMode::Sticky {
+        fx_window::raise_fx_if_visible(app);
+    }
+    let _ = app.emit_to("main", "always-on-top-changed", pinned);
+    Ok(pinned)
+}
+
+#[tauri::command]
+fn get_always_on_top(state: State<'_, AppState>) -> bool {
+    *state.always_on_top.lock().unwrap()
+}
+
+#[tauri::command]
+async fn set_always_on_top(pinned: bool, app: AppHandle) -> Result<bool, String> {
+    let (send, receive) = tokio::sync::oneshot::channel();
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        let _ = send.send(apply_always_on_top_on_ui(&handle, pinned));
+    })
+    .map_err(|error| error.to_string())?;
+    receive.await.map_err(|_| {
+        language::text("Unable to update window pin state.", "更新窗口置顶状态失败。").to_string()
     })?
 }
 
@@ -636,6 +673,7 @@ pub fn run() {
             edge_dock.load(saved_window)?;
             let initial_mode = db.load_window_mode()?;
             let saved_workspace = db.load_workspace_geometry()?;
+            let initial_pinned = db.load_always_on_top()?;
             let fx = FxRuntime::new(preferences.fx_preferences(), edge_dock.snapshot(), edge_dock.generation());
             app.manage(AppState {
                 db: db.clone(),
@@ -648,11 +686,12 @@ pub fn run() {
                 language,
                 window_mode: Mutex::new(initial_mode),
                 workspace_geometry: Mutex::new(saved_workspace.clone()),
+                always_on_top: Mutex::new(initial_pinned),
             });
 
             if initial_mode == WindowMode::Workspace {
                 edge_dock.suspend(app.handle());
-                window::enable_workspace_window_style(&win)?;
+                window::enable_workspace_window_style(&win, initial_pinned)?;
                 if let Ok(applied) = window::apply_workspace_geometry(&win, saved_workspace.as_ref()) {
                     *app.state::<AppState>().workspace_geometry.lock().unwrap() = Some(applied.clone());
                     let _ = db.save_workspace_geometry(&applied);
@@ -660,7 +699,7 @@ pub fn run() {
                 let _ = win.show();
                 window::refresh_transparent_surface_force(&win);
             } else {
-                window::enable_sticky_window_style(&win)?;
+                window::enable_sticky_window_style(&win, initial_pinned)?;
                 edge_dock.restore_on_startup(app.handle(), &win)?;
             }
             edge_dock.spawn_cursor_poller(app.handle().clone());
@@ -788,6 +827,8 @@ pub fn run() {
             get_edge_dock,
             get_window_mode,
             set_window_mode,
+            get_always_on_top,
+            set_always_on_top,
             minimize_main,
             toggle_maximize_main,
             is_main_maximized,

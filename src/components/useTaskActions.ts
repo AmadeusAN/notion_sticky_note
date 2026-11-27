@@ -26,7 +26,7 @@ export function useTaskActions() {
   } | null>(null);
   const [confirmation, setConfirmation] = useState<Removal | null>(null);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
-  const [reminderNotice, setReminderNotice] = useState<Task | null>(null);
+  const [firedReminderIds, setFiredReminderIds] = useState<string[]>([]);
 
   const editingTask = useMemo(
     () => (editingTaskId ? tasks.find((t) => t.id === editingTaskId) ?? null : null),
@@ -39,7 +39,7 @@ export function useTaskActions() {
     let cleanup: (() => void) | null = null;
     void apiListenTaskReminder((firedTask) => {
       if (!alive) return;
-      setReminderNotice(firedTask);
+      setFiredReminderIds((prev) => (prev.includes(firedTask.id) ? prev : [...prev, firedTask.id]));
       useTaskStore.setState((state) => ({
         tasks: state.tasks.map((t) => (t.id === firedTask.id ? firedTask : t)),
       }));
@@ -54,6 +54,14 @@ export function useTaskActions() {
       cleanup?.();
     };
   }, []);
+
+  const activeReminders = useMemo(
+    () =>
+      tasks.filter(
+        (t) => !t.completed && (Boolean(t.remindedAt) || firedReminderIds.includes(t.id)),
+      ),
+    [tasks, firedReminderIds],
+  );
 
   const openComposer = useCallback(
     (
@@ -168,8 +176,7 @@ export function useTaskActions() {
     setConfirmation,
     editingTask,
     setEditingTaskId,
-    reminderNotice,
-    setReminderNotice,
+    activeReminders,
     modalOpen,
     openComposer,
     addGroupTasks,

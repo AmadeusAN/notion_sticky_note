@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import { useLocale } from "../stores/languageStore";
 import { useTaskStore } from "../stores/taskStore";
 import { useModeStore } from "../stores/modeStore";
+import { useToastStore } from "../stores/toastStore";
 import { TaskGroups } from "./TaskGroups";
 import { HomeView } from "./HomeView";
 import { CalendarView } from "./CalendarView";
@@ -9,6 +10,7 @@ import { BoardView } from "./BoardView";
 import { TaskInspector } from "./TaskInspector";
 import { Composer } from "./Composer";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { ReminderAlert } from "./ReminderAlert";
 import { useTaskActions } from "./useTaskActions";
 import { apiHideWindow } from "../services/tauriApi";
 import { todayIso } from "../services/taskDate";
@@ -32,12 +34,15 @@ export function WorkspaceShell({ onOpenSettings }: Props) {
   const forceSync = useTaskStore((s) => s.forceSync);
 
   const maximized = useModeStore((s) => s.maximized);
+  const alwaysOnTop = useModeStore((s) => s.alwaysOnTop);
   const switching = useModeStore((s) => s.switching);
   const modeError = useModeStore((s) => s.error);
   const clearModeError = useModeStore((s) => s.clearError);
   const setMode = useModeStore((s) => s.setMode);
+  const toggleAlwaysOnTop = useModeStore((s) => s.toggleAlwaysOnTop);
   const minimize = useModeStore((s) => s.minimize);
   const toggleMaximize = useModeStore((s) => s.toggleMaximize);
+  const pushToast = useToastStore((s) => s.pushToast);
 
   const actions = useTaskActions();
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
@@ -178,6 +183,24 @@ export function WorkspaceShell({ onOpenSettings }: Props) {
               <path d="M14 20v-5h5" />
             </svg>
             <span>{l.t("便签模式")}</span>
+          </button>
+
+          <button
+            type="button"
+            className={`icon-btn workspace-pin-btn${alwaysOnTop ? " is-pinned" : ""}`}
+            aria-pressed={alwaysOnTop}
+            title={alwaysOnTop ? l.t("取消置顶") : l.t("窗口置顶")}
+            aria-label={alwaysOnTop ? l.t("取消置顶") : l.t("窗口置顶")}
+            onClick={() =>
+              void toggleAlwaysOnTop().then((pinned) =>
+                pushToast(l.t(pinned ? "已置顶窗口" : "已取消置顶")),
+              )
+            }
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 17v5" />
+              <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" />
+            </svg>
           </button>
 
           <button
@@ -340,12 +363,6 @@ export function WorkspaceShell({ onOpenSettings }: Props) {
             </div>
           )}
           {windowError && <p className="msg error" role="alert">{l.errorText(windowError)}</p>}
-          {actions.reminderNotice && (
-            <div className="msg reminder-banner" role="status">
-              <span>{l.t("任务提醒：{title}", { title: actions.reminderNotice.title })}</span>
-              <button type="button" onClick={() => actions.setReminderNotice(null)}>{l.t("知道了")}</button>
-            </div>
-          )}
           {operationError && (
             <div className="msg error" role="alert">
               <span>{l.errorText(operationError.message)}</span>
@@ -522,6 +539,13 @@ export function WorkspaceShell({ onOpenSettings }: Props) {
           onConfirm={actions.confirmRemoval}
           onCancel={() => actions.setConfirmation(null)}
           fallbackFocusRef={fallbackFocus}
+        />
+      )}
+      {!actions.modalOpen && (
+        <ReminderAlert
+          reminders={actions.activeReminders}
+          onComplete={actions.toggleTask}
+          onInspect={(task) => setInspectedTaskId(task.id)}
         />
       )}
     </div>

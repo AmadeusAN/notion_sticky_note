@@ -235,18 +235,20 @@ fn layout_fx(
     })
 }
 
-/// Keep the transparent FX layer above the sticky note without activating/focusing it.
+/// Keep the transparent FX layer right above the sticky note without overriding pin preference.
 /// Otherwise leaves render "behind" the opaque main HWND.
 fn raise_fx_above_main(main: &tauri::WebviewWindow, fx: &tauri::WebviewWindow) {
+    let pinned = main.is_always_on_top().unwrap_or(false);
     #[cfg(not(windows))]
-    let _ = fx.set_always_on_top(true);
-    let _ = main.set_always_on_top(true);
+    {
+        let _ = fx.set_always_on_top(pinned);
+    }
 
     #[cfg(windows)]
     {
         use windows::Win32::Foundation::HWND;
         use windows::Win32::UI::WindowsAndMessaging::{
-            SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+            SetWindowPos, HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
         };
 
         let Ok(fx_hwnd) = fx.hwnd() else {
@@ -257,11 +259,12 @@ fn raise_fx_above_main(main: &tauri::WebviewWindow, fx: &tauri::WebviewWindow) {
         };
         let fx_hwnd = HWND(fx_hwnd.0);
         let main_hwnd = HWND(main_hwnd.0);
+        let band = if pinned { HWND_TOPMOST } else { HWND_NOTOPMOST };
         unsafe {
-            // Both topmost; place FX at the top of the topmost band, then tuck main under it.
+            // Keep FX directly above main inside main's current z-order band.
             let _ = SetWindowPos(
                 fx_hwnd,
-                HWND_TOPMOST,
+                band,
                 0,
                 0,
                 0,

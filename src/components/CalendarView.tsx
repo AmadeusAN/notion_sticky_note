@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type DragEvent as ReactDragEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useLocale } from "../stores/languageStore";
 import { useModeStore } from "../stores/modeStore";
 import { ARCHIVE_GROUP_ID, NOTION_GROUP_ID, type Task, type TaskScheduleInput, type TaskUpdateInput } from "../types";
@@ -13,7 +13,9 @@ import {
 import {
   addDays,
   applyDaySpanResizePreview,
+  applyTaskMovePreview,
   clampResizeEndDate,
+  computeMovedDateRange,
   diffDays,
   getMonthGridDays,
   getTaskSpan,
@@ -25,6 +27,7 @@ import {
   parseTimeToMinutes,
   snapMinutes,
   toIsoDate,
+  type TaskMovePreview,
   type TaskSpan,
 } from "../services/calendarLayout";
 
@@ -43,8 +46,38 @@ interface Props {
 const HOUR_HEIGHT = 56;
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
 
+interface MoveDragState {
+  task: Task;
+  origSpan: TaskSpan | null;
+  grabOffsetDays: number;
+  startX: number;
+  startY: number;
+  clientX: number;
+  clientY: number;
+  active: boolean;
+  targetKind: "month-day" | "allday" | "time" | "unscheduled" | null;
+  targetDayIso: string | null;
+  targetStartMin: number | null;
+}
+
 function isEditableLocalTask(task: Task): boolean {
   return !task.notionId && task.groupId !== NOTION_GROUP_ID && task.groupId !== ARCHIVE_GROUP_ID;
+}
+
+function computeTimedTargetTimes(
+  origSpan: TaskSpan | null,
+  targetStartMin: number,
+): { startTime: string; endTime: string } {
+  const snappedStart = Math.max(0, Math.min(23 * 60 + 45, snapMinutes(targetStartMin, 15)));
+  const prevStart = origSpan ? parseTimeToMinutes(origSpan.startTime) : null;
+  const prevEnd = origSpan ? parseTimeToMinutes(origSpan.endTime) : null;
+  const duration =
+    prevStart !== null && prevEnd !== null && prevEnd > prevStart ? prevEnd - prevStart : 60;
+  const endMin = Math.min(23 * 60 + 59, snappedStart + duration);
+  return {
+    startTime: minutesToHHMM(snappedStart),
+    endTime: minutesToHHMM(endMin),
+  };
 }
 
 export function CalendarView({
@@ -69,8 +102,6 @@ export function CalendarView({
   const focusSize = useModeStore((s) => s.calendarFocusSize);
   const toggleCalendarFocus = useModeStore((s) => s.toggleCalendarFocus);
   const focusActive = focusStyle !== "off";
-  const [dropDayIso, setDropDayIso] = useState<string | null>(null);
-  const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
   const [resizing, setResizing] = useState<{
     taskId: string;
     dayIso: string;
@@ -88,6 +119,9 @@ export function CalendarView({
   } | null>(null);
   const daySpanResizeRef = useRef(daySpanResize);
   daySpanResizeRef.current = daySpanResize;
+  const [moveDrag, setMoveDrag] = useState<MoveDragState | null>(null);
+  const moveDragRef = useRef(moveDrag);
+  moveDragRef.current = moveDrag;
   const justResizedRef = useRef(false);
 
   const [nowMinutes, setNowMinutes] = useState(() => {
@@ -217,9 +251,57 @@ export function CalendarView({
     return list;
   }, [tasks]);
 
+  const movePreview = useMemo<TaskMovePreview | null>(() => {
+    if (
+      !moveDrag?.active ||
+      !moveDrag.targetDayIso ||
+      !moveDrag.targetKind ||
+      moveDrag.targetKind === "unscheduled"
+    ) {
+      return null;
+    }
+    const { task, origSpan, grabOffsetDays, targetKind, targetDayIso, targetStartMin } = moveDrag;
+    if (targetKind === "time" && targetStartMin !== null) {
+      const { startTime, endTime } = computeTimedTargetTimes(origSpan, targetStartMin);
+      return {
+        task,
+        startDate: targetDayIso,
+        endDate: targetDayIso,
+        startTime,
+        endTime,
+        isTimed: true,
+      };
+    }
+    if (origSpan?.isMultiDay) {
+      const { startDate, endDate } = computeMovedDateRange(
+        origSpan.startDate,
+        origSpan.endDate,
+        targetDayIso,
+        grabOffsetDays,
+      );
+      return {
+        task,
+        startDate,
+        endDate,
+        startTime: null,
+        endTime: null,
+        isTimed: false,
+      };
+    }
+    const preserveTime = targetKind === "month-day" && Boolean(origSpan?.isTimed);
+    return {
+      task,
+      startDate: targetDayIso,
+      endDate: targetDayIso,
+      startTime: preserveTime ? origSpan?.startTime ?? null : null,
+      endTime: preserveTime ? origSpan?.endTime ?? null : null,
+      isTimed: preserveTime,
+    };
+  }, [moveDrag]);
+
   const effectiveSpans = useMemo(
-    () => applyDaySpanResizePreview(spans, daySpanResize),
-    [spans, daySpanResize],
+    () => applyTaskMovePreview(applyDaySpanResizePreview(spans, daySpanResize), movePreview),
+    [spans, daySpanResize, movePreview],
   );
 
   const unscheduled = useMemo(
@@ -510,7 +592,15 @@ export function CalendarView({
     if (focusStyle === "mosaic") {
       applyMosaicFrame(focusCurrentRef.current.col, focusCurrentRef.current.row);
     }
-  }, [mode, focusStyle, daySpanResize?.previewEndDate, refreshMosaicDomCache, applyMosaicFrame]);
+  }, [
+    mode,
+    focusStyle,
+    daySpanResize?.previewEndDate,
+    movePreview?.startDate,
+    movePreview?.endDate,
+    refreshMosaicDomCache,
+    applyMosaicFrame,
+  ]);
 
   const beginDaySpanResize = (e: ReactPointerEvent, span: TaskSpan) => {
     e.preventDefault();
@@ -529,8 +619,6 @@ export function CalendarView({
   const renderSpanResizeHandle = (span: TaskSpan) => (
     <span
       className="cal-span-resize-handle"
-      draggable={false}
-      onDragStart={(e) => e.preventDefault()}
       onPointerDown={(e) => beginDaySpanResize(e, span)}
       onClick={(e) => e.stopPropagation()}
       title={l.t("拖动调整结束日期")}
@@ -542,44 +630,274 @@ export function CalendarView({
     </span>
   );
 
-  const handleMonthPointerMove = (
-    e: ReactPointerEvent<HTMLDivElement> | ReactDragEvent<HTMLDivElement>,
-  ) => {
-    if (focusStyle === "off" || mode !== "month") return;
+  const updateMonthFocusAtPoint = useCallback(
+    (clientX: number, clientY: number) => {
+      if (focusStyle === "off" || mode !== "month") return;
 
-    if (focusStyle === "smooth") {
-      const vpEl = monthViewportRef.current;
-      if (!vpEl) return;
-      const rect = vpEl.getBoundingClientRect();
-      if (rect.width <= 0 || rect.height <= 0) return;
-      const x = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-      const y = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
+      if (focusStyle === "smooth") {
+        const vpEl = monthViewportRef.current;
+        if (!vpEl) return;
+        const rect = vpEl.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return;
+        const x = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+        const y = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
+        if (
+          Math.abs(x - smoothTargetRef.current.x) < 0.002 &&
+          Math.abs(y - smoothTargetRef.current.y) < 0.002
+        ) {
+          return;
+        }
+        smoothTargetRef.current = { x, y };
+        startFocusSpring();
+        return;
+      }
+
+      const cell = document
+        .elementsFromPoint(clientX, clientY)
+        .find((el): el is HTMLElement => el instanceof HTMLElement && el.matches("[data-col][data-row]"));
+      if (!cell) return;
+      const col = Number(cell.dataset.col);
+      const row = Number(cell.dataset.row);
+      if (!Number.isFinite(col) || !Number.isFinite(row)) return;
+      const nextTarget = { col: col + 0.5, row: row + 0.5 };
       if (
-        Math.abs(x - smoothTargetRef.current.x) < 0.002 &&
-        Math.abs(y - smoothTargetRef.current.y) < 0.002
+        Math.abs(nextTarget.col - focusTargetRef.current.col) < 0.01 &&
+        Math.abs(nextTarget.row - focusTargetRef.current.row) < 0.01
       ) {
         return;
       }
-      smoothTargetRef.current = { x, y };
+      focusTargetRef.current = nextTarget;
       startFocusSpring();
-      return;
-    }
+    },
+    [focusStyle, mode, startFocusSpring],
+  );
 
-    const cell = e.target instanceof Element ? e.target.closest<HTMLElement>("[data-col][data-row]") : null;
-    if (!cell) return;
-    const col = Number(cell.dataset.col);
-    const row = Number(cell.dataset.row);
-    if (!Number.isFinite(col) || !Number.isFinite(row)) return;
-    const nextTarget = { col: col + 0.5, row: row + 0.5 };
-    if (
-      Math.abs(nextTarget.col - focusTargetRef.current.col) < 0.01 &&
-      Math.abs(nextTarget.row - focusTargetRef.current.row) < 0.01
-    ) {
+  const handleMonthPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    updateMonthFocusAtPoint(e.clientX, e.clientY);
+  };
+
+  const beginTaskMoveDrag = (e: ReactPointerEvent, task: Task, span: TaskSpan | null) => {
+    if (e.button !== 0 || !isEditableLocalTask(task)) return;
+    if ((e.target as Element | null)?.closest("button, .cal-span-resize-handle, .cal-resize-handle")) {
       return;
     }
-    focusTargetRef.current = nextTarget;
-    startFocusSpring();
+    e.preventDefault();
+    let grabOffsetDays = 0;
+    if (span && span.isMultiDay) {
+      const hitCell = document
+        .elementsFromPoint(e.clientX, e.clientY)
+        .find(
+          (el): el is HTMLElement =>
+            el instanceof HTMLElement && Boolean(el.dataset.day) && el.matches(".cal-day-cell, .cal-allday-cell"),
+        );
+      if (hitCell?.dataset.day) {
+        const spanLen = Math.max(0, diffDays(span.startDate, span.endDate));
+        grabOffsetDays = Math.max(0, Math.min(spanLen, diffDays(span.startDate, hitCell.dataset.day)));
+      }
+    }
+    setMoveDrag({
+      task,
+      origSpan: span,
+      grabOffsetDays,
+      startX: e.clientX,
+      startY: e.clientY,
+      clientX: e.clientX,
+      clientY: e.clientY,
+      active: false,
+      targetKind: null,
+      targetDayIso: null,
+      targetStartMin: null,
+    });
   };
+
+  const applyDrop = useCallback(
+    (
+      task: Task,
+      origSpan: TaskSpan | null,
+      targetKind: "month-day" | "allday" | "time",
+      targetDayIso: string,
+      targetStartMin: number | null,
+      grabOffsetDays: number,
+    ) => {
+      if (!isEditableLocalTask(task)) return;
+
+      if (targetKind === "time" && targetStartMin !== null) {
+        const { startTime, endTime } = computeTimedTargetTimes(origSpan, targetStartMin);
+        if (
+          origSpan &&
+          !origSpan.isMultiDay &&
+          origSpan.startDate === targetDayIso &&
+          origSpan.startTime === startTime &&
+          origSpan.endTime === endTime
+        ) {
+          return;
+        }
+        void onRescheduleTask(task.id, {
+          updateSchedule: true,
+          startDate: targetDayIso,
+          endDate: null,
+          startTime,
+          endTime,
+          reminderAt: task.reminderAt ?? null,
+        });
+        return;
+      }
+
+      if (origSpan?.isMultiDay) {
+        const { startDate, endDate } = computeMovedDateRange(
+          origSpan.startDate,
+          origSpan.endDate,
+          targetDayIso,
+          grabOffsetDays,
+        );
+        if (startDate === origSpan.startDate && endDate === origSpan.endDate) return;
+        void onRescheduleTask(task.id, {
+          updateSchedule: true,
+          startDate,
+          endDate,
+          startTime: null,
+          endTime: null,
+          reminderAt: task.reminderAt ?? null,
+        });
+        return;
+      }
+
+      const preserveTime = targetKind === "month-day" && Boolean(origSpan?.isTimed);
+      if (origSpan && targetDayIso === origSpan.startDate && (preserveTime || !origSpan.isTimed)) {
+        return;
+      }
+      void onRescheduleTask(task.id, {
+        updateSchedule: true,
+        startDate: targetDayIso,
+        endDate: null,
+        startTime: preserveTime ? origSpan?.startTime ?? null : null,
+        endTime: preserveTime ? origSpan?.endTime ?? null : null,
+        reminderAt: task.reminderAt ?? null,
+      });
+    },
+    [onRescheduleTask],
+  );
+
+  const isMovingTask = Boolean(moveDrag);
+  useEffect(() => {
+    if (!isMovingTask) return;
+    let cursorApplied = false;
+    let prevCursor = "";
+    let prevUserSelect = "";
+
+    const hitTestTarget = (
+      clientX: number,
+      clientY: number,
+      hasOrigSpan: boolean,
+    ): Pick<MoveDragState, "targetKind" | "targetDayIso" | "targetStartMin"> => {
+      const elements = document.elementsFromPoint(clientX, clientY);
+      if (
+        hasOrigSpan &&
+        elements.some(
+          (el) => el instanceof HTMLElement && el.matches('.cal-unscheduled, [data-unscheduled-drop="true"]'),
+        )
+      ) {
+        return { targetKind: "unscheduled", targetDayIso: null, targetStartMin: null };
+      }
+      for (const el of elements) {
+        if (!(el instanceof HTMLElement) || !el.dataset.day) continue;
+        if (el.matches(".cal-day-cell")) {
+          return { targetKind: "month-day", targetDayIso: el.dataset.day, targetStartMin: null };
+        }
+        if (el.matches(".cal-allday-cell")) {
+          return { targetKind: "allday", targetDayIso: el.dataset.day, targetStartMin: null };
+        }
+        if (el.matches(".cal-time-col")) {
+          const rect = el.getBoundingClientRect();
+          const relY = Math.max(0, Math.min(rect.height, clientY - rect.top));
+          const rawMin = (relY / HOUR_HEIGHT) * 60;
+          const snappedStart = Math.max(0, Math.min(23 * 60 + 45, snapMinutes(rawMin, 15)));
+          return { targetKind: "time", targetDayIso: el.dataset.day, targetStartMin: snappedStart };
+        }
+      }
+      return { targetKind: null, targetDayIso: null, targetStartMin: null };
+    };
+
+    const onMove = (e: PointerEvent) => {
+      const curr = moveDragRef.current;
+      if (!curr) return;
+      if (!curr.active && Math.hypot(e.clientX - curr.startX, e.clientY - curr.startY) < 5) {
+        return;
+      }
+      if (!cursorApplied) {
+        prevCursor = document.body.style.cursor;
+        prevUserSelect = document.body.style.userSelect;
+        document.body.style.cursor = "grabbing";
+        document.body.style.userSelect = "none";
+        cursorApplied = true;
+      }
+      updateMonthFocusAtPoint(e.clientX, e.clientY);
+      const target = hitTestTarget(e.clientX, e.clientY, curr.origSpan !== null);
+      setMoveDrag((prev) =>
+        prev
+          ? {
+              ...prev,
+              active: true,
+              clientX: e.clientX,
+              clientY: e.clientY,
+              ...target,
+            }
+          : null,
+      );
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setMoveDrag(null);
+      }
+    };
+
+    const onUp = () => {
+      const current = moveDragRef.current;
+      setMoveDrag(null);
+      if (!current?.active) return;
+      justResizedRef.current = true;
+      window.setTimeout(() => {
+        justResizedRef.current = false;
+      }, 0);
+      if (current.targetKind === "unscheduled" && current.origSpan !== null) {
+        void onRescheduleTask(current.task.id, {
+          updateSchedule: true,
+          startDate: null,
+          endDate: null,
+          startTime: null,
+          endTime: null,
+          reminderAt: null,
+        });
+        return;
+      }
+      if (current.targetDayIso && current.targetKind && current.targetKind !== "unscheduled") {
+        applyDrop(
+          current.task,
+          current.origSpan,
+          current.targetKind,
+          current.targetDayIso,
+          current.targetStartMin,
+          current.grabOffsetDays,
+        );
+      }
+    };
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("pointerup", onUp, { once: true });
+    return () => {
+      if (cursorApplied) {
+        document.body.style.cursor = prevCursor;
+        document.body.style.userSelect = prevUserSelect;
+      }
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("pointerup", onUp);
+    };
+  }, [isMovingTask, applyDrop, onRescheduleTask, updateMonthFocusAtPoint]);
+
+  const isUnschedulingTarget = Boolean(moveDrag?.active && moveDrag.targetKind === "unscheduled");
 
   const activeDays = useMemo(() => {
     if (mode === "day") return [cursorIso];
@@ -597,67 +915,6 @@ export function CalendarView({
       setCursorIso(addDays(cursorIso, direction));
     }
   };
-
-  const applyDrop = (taskId: string, targetDayIso: string, targetStartMin: number | null) => {
-    const task = tasks.find((t) => t.id === taskId);
-    if (!task || !isEditableLocalTask(task)) return;
-    const prevSpan = getTaskSpan(task);
-
-    if (targetStartMin !== null) {
-      const snappedStart = Math.max(0, Math.min(23 * 60 + 45, snapMinutes(targetStartMin, 15)));
-      const prevStart = prevSpan ? parseTimeToMinutes(prevSpan.startTime) : null;
-      const prevEnd = prevSpan ? parseTimeToMinutes(prevSpan.endTime) : null;
-      const duration =
-        prevStart !== null && prevEnd !== null && prevEnd > prevStart ? prevEnd - prevStart : 60;
-      const endMin = Math.min(23 * 60 + 59, snappedStart + duration);
-      void onRescheduleTask(task.id, {
-        updateSchedule: true,
-        startDate: targetDayIso,
-        endDate: null,
-        startTime: minutesToHHMM(snappedStart),
-        endTime: minutesToHHMM(endMin),
-        reminderAt: task.reminderAt ?? null,
-      });
-      return;
-    }
-
-    if (prevSpan && prevSpan.isMultiDay) {
-      const spanLen = Math.max(1, diffDays(prevSpan.startDate, prevSpan.endDate));
-      void onRescheduleTask(task.id, {
-        updateSchedule: true,
-        startDate: targetDayIso,
-        endDate: addDays(targetDayIso, spanLen),
-        startTime: null,
-        endTime: null,
-        reminderAt: task.reminderAt ?? null,
-      });
-      return;
-    }
-
-    // Month / All-day drop: keep single-day time on Month view, or clear time if explicitly dropped on All-day strip in Week/Day.
-    const preserveTime = mode === "month" && prevSpan?.isTimed;
-    void onRescheduleTask(task.id, {
-      updateSchedule: true,
-      startDate: targetDayIso,
-      endDate: null,
-      startTime: preserveTime ? prevSpan.startTime : null,
-      endTime: preserveTime ? prevSpan.endTime : null,
-      reminderAt: task.reminderAt ?? null,
-    });
-  };
-
-  const startDrag = (e: React.DragEvent, task: Task) => {
-    if (!isEditableLocalTask(task)) {
-      e.preventDefault();
-      return;
-    }
-    e.dataTransfer.setData("text/sticky-task-id", task.id);
-    e.dataTransfer.effectAllowed = "move";
-    setDraggedTaskId(task.id);
-  };
-
-  const readDraggedTaskId = (e: React.DragEvent) =>
-    e.dataTransfer.getData("text/sticky-task-id") || draggedTaskId;
 
   return (
     <div className="calendar-root">
@@ -754,7 +1011,8 @@ export function CalendarView({
 
           <button
             type="button"
-            className={`cal-drawer-toggle${showUnscheduled ? " active" : ""}`}
+            data-unscheduled-drop="true"
+            className={`cal-drawer-toggle${showUnscheduled ? " active" : ""}${isUnschedulingTarget ? " is-drop-target" : ""}`}
             aria-pressed={showUnscheduled}
             onClick={() => setShowUnscheduled((v) => !v)}
           >
@@ -799,7 +1057,6 @@ export function CalendarView({
                 ref={monthViewportRef}
                 className="cal-month-viewport"
                 onPointerMove={handleMonthPointerMove}
-                onDragOver={handleMonthPointerMove}
               >
                 <div
                   ref={monthWeeksRef}
@@ -825,6 +1082,9 @@ export function CalendarView({
                             (dayObj.getMonth() !== cursorDate.getMonth() ||
                               dayObj.getFullYear() !== cursorDate.getFullYear());
                           const isToday = dayIso === today;
+                          const isDropTarget = Boolean(
+                            movePreview && dayIso >= movePreview.startDate && dayIso <= movePreview.endDate,
+                          );
                           const isSpanPreview = Boolean(
                             daySpanResize &&
                               dayIso >= daySpanResize.startDate &&
@@ -840,22 +1100,7 @@ export function CalendarView({
                               data-day={dayIso}
                               data-col={colIndex}
                               data-row={rowIndex}
-                              className={`cal-day-cell${isToday ? " is-today" : ""}${isOtherMonth ? " is-outside" : ""}${dropDayIso === dayIso ? " is-drop-target" : ""}${isSpanPreview ? " is-span-preview" : ""}`}
-                              onDragOver={(e) => {
-                                e.preventDefault();
-                                e.dataTransfer.dropEffect = "move";
-                                if (dropDayIso !== dayIso) setDropDayIso(dayIso);
-                              }}
-                              onDragLeave={() => {
-                                if (dropDayIso === dayIso) setDropDayIso(null);
-                              }}
-                              onDrop={(e) => {
-                                e.preventDefault();
-                                setDropDayIso(null);
-                                const id = readDraggedTaskId(e);
-                                setDraggedTaskId(null);
-                                if (id) applyDrop(id, dayIso, null);
-                              }}
+                              className={`cal-day-cell${isToday ? " is-today" : ""}${isOtherMonth ? " is-outside" : ""}${isDropTarget ? " is-drop-target" : ""}${isSpanPreview ? " is-span-preview" : ""}`}
                             >
                               <div className="cal-day-top">
                                 <span className={`cal-day-num${isToday ? " is-today-pill" : ""}`}>
@@ -888,21 +1133,22 @@ export function CalendarView({
                                   const task = span.task;
                                   const editable = isEditableLocalTask(task);
                                   const isResizingSpan = daySpanResize?.taskId === task.id;
+                                  const isMovingPreview = Boolean(
+                                    movePreview && movePreview.task.id === task.id,
+                                  );
+                                  const isUnschedulingSource = Boolean(
+                                    isUnschedulingTarget && moveDrag?.task.id === task.id,
+                                  );
                                   return (
                                     <div
                                       key={task.id}
-                                      draggable={editable && !isResizingSpan}
-                                      onDragStart={(e) => startDrag(e, task)}
-                                      onDragEnd={() => {
-                                        setDraggedTaskId(null);
-                                        setDropDayIso(null);
-                                      }}
+                                      onPointerDown={(e) => beginTaskMoveDrag(e, task, span)}
                                       onClick={(e) => {
                                         e.stopPropagation();
                                         if (justResizedRef.current) return;
                                         onSelectTask(task);
                                       }}
-                                      className={`cal-pill${task.completed ? " done" : ""}${task.notionId ? " is-notion" : ""}${selectedTaskId === task.id ? " is-selected" : ""}${isResizingSpan ? " is-resizing-span" : ""}`}
+                                      className={`cal-pill${task.completed ? " done" : ""}${task.notionId ? " is-notion" : ""}${selectedTaskId === task.id ? " is-selected" : ""}${isResizingSpan ? " is-resizing-span" : ""}${isMovingPreview ? " is-moving-preview" : ""}${isUnschedulingSource ? " is-dragging-source" : ""}`}
                                     >
                                       <button
                                         type="button"
@@ -935,24 +1181,25 @@ export function CalendarView({
                             const task = bar.task;
                             const editable = isEditableLocalTask(task);
                             const isResizingSpan = daySpanResize?.taskId === task.id;
+                            const isMovingPreview = Boolean(
+                              movePreview && movePreview.task.id === task.id,
+                            );
+                            const isUnschedulingSource = Boolean(
+                              isUnschedulingTarget && moveDrag?.task.id === task.id,
+                            );
                             const spanDays = diffDays(bar.span.startDate, bar.span.endDate) + 1;
                             return (
                               <div
                                 key={`${bar.task.id}-${weekDays[0]}`}
                                 data-col-start={bar.colStart}
                                 data-col-span={bar.colSpan}
-                                draggable={editable && !isResizingSpan}
-                                onDragStart={(e) => startDrag(e, task)}
-                                onDragEnd={() => {
-                                  setDraggedTaskId(null);
-                                  setDropDayIso(null);
-                                }}
+                                onPointerDown={(e) => beginTaskMoveDrag(e, task, bar.span)}
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   if (justResizedRef.current) return;
                                   onSelectTask(task);
                                 }}
-                                className={`cal-span-bar${task.completed ? " done" : ""}${task.notionId ? " is-notion" : ""}${bar.continuesLeft ? " cont-left" : ""}${bar.continuesRight ? " cont-right" : ""}${selectedTaskId === task.id ? " is-selected" : ""}${isResizingSpan ? " is-resizing-span" : ""}`}
+                                className={`cal-span-bar${task.completed ? " done" : ""}${task.notionId ? " is-notion" : ""}${bar.continuesLeft ? " cont-left" : ""}${bar.continuesRight ? " cont-right" : ""}${selectedTaskId === task.id ? " is-selected" : ""}${isResizingSpan ? " is-resizing-span" : ""}${isMovingPreview ? " is-moving-preview" : ""}${isUnschedulingSource ? " is-dragging-source" : ""}`}
                                 style={{
                                   left: `calc(${(bar.colStart / 7) * 100}% + 3px)`,
                                   width: `calc(${(bar.colSpan / 7) * 100}% - 6px)`,
@@ -1024,6 +1271,12 @@ export function CalendarView({
                   const allDayItems = effectiveSpans.filter(
                     (s) => !s.isTimed && s.startDate <= dayIso && dayIso <= s.endDate,
                   );
+                  const isDropTarget = Boolean(
+                    movePreview &&
+                      !movePreview.isTimed &&
+                      dayIso >= movePreview.startDate &&
+                      dayIso <= movePreview.endDate,
+                  );
                   const isSpanPreview = Boolean(
                     daySpanResize &&
                       dayIso >= daySpanResize.startDate &&
@@ -1033,40 +1286,26 @@ export function CalendarView({
                     <div
                       key={dayIso}
                       data-day={dayIso}
-                      className={`cal-allday-cell${dropDayIso === `all-${dayIso}` ? " is-drop-target" : ""}${isSpanPreview ? " is-span-preview" : ""}`}
-                      onDragOver={(e) => {
-                        e.preventDefault();
-                        e.dataTransfer.dropEffect = "move";
-                        if (dropDayIso !== `all-${dayIso}`) setDropDayIso(`all-${dayIso}`);
-                      }}
-                      onDragLeave={() => {
-                        if (dropDayIso === `all-${dayIso}`) setDropDayIso(null);
-                      }}
-                      onDrop={(e) => {
-                        e.preventDefault();
-                        setDropDayIso(null);
-                        const id = readDraggedTaskId(e);
-                        setDraggedTaskId(null);
-                        if (id) applyDrop(id, dayIso, null);
-                      }}
+                      className={`cal-allday-cell${isDropTarget ? " is-drop-target" : ""}${isSpanPreview ? " is-span-preview" : ""}`}
                     >
                       {allDayItems.map((span) => {
                         const editable = isEditableLocalTask(span.task);
                         const isResizingSpan = daySpanResize?.taskId === span.task.id;
+                        const isMovingPreview = Boolean(
+                          movePreview && movePreview.task.id === span.task.id,
+                        );
+                        const isUnschedulingSource = Boolean(
+                          isUnschedulingTarget && moveDrag?.task.id === span.task.id,
+                        );
                         return (
                           <div
                             key={span.task.id}
-                            draggable={editable && !isResizingSpan}
-                            onDragStart={(e) => startDrag(e, span.task)}
-                            onDragEnd={() => {
-                              setDraggedTaskId(null);
-                              setDropDayIso(null);
-                            }}
+                            onPointerDown={(e) => beginTaskMoveDrag(e, span.task, span)}
                             onClick={() => {
                               if (justResizedRef.current) return;
                               onSelectTask(span.task);
                             }}
-                            className={`cal-pill${span.task.completed ? " done" : ""}${span.task.notionId ? " is-notion" : ""}${selectedTaskId === span.task.id ? " is-selected" : ""}${isResizingSpan ? " is-resizing-span" : ""}`}
+                            className={`cal-pill${span.task.completed ? " done" : ""}${span.task.notionId ? " is-notion" : ""}${selectedTaskId === span.task.id ? " is-selected" : ""}${isResizingSpan ? " is-resizing-span" : ""}${isMovingPreview ? " is-moving-preview" : ""}${isUnschedulingSource ? " is-dragging-source" : ""}`}
                           >
                             <button
                               type="button"
@@ -1107,31 +1346,15 @@ export function CalendarView({
 
                   {activeDays.map((dayIso) => {
                     const isToday = dayIso === today;
+                    const isTimeDropTarget = Boolean(
+                      moveDrag?.active && moveDrag.targetKind === "time" && moveDrag.targetDayIso === dayIso,
+                    );
                     const dayTimed = layoutTimedDayEvents(dayIso, effectiveSpans, HOUR_HEIGHT);
                     return (
                       <div
                         key={dayIso}
                         data-day={dayIso}
-                        className="cal-time-col"
-                        onDragOver={(e) => {
-                          e.preventDefault();
-                          e.dataTransfer.dropEffect = "move";
-                          if (dropDayIso !== dayIso) setDropDayIso(dayIso);
-                        }}
-                        onDragLeave={() => {
-                          if (dropDayIso === dayIso) setDropDayIso(null);
-                        }}
-                        onDrop={(e) => {
-                          e.preventDefault();
-                          setDropDayIso(null);
-                          const id = readDraggedTaskId(e);
-                          setDraggedTaskId(null);
-                          if (!id) return;
-                          const rect = e.currentTarget.getBoundingClientRect();
-                          const relY = Math.max(0, Math.min(rect.height, e.clientY - rect.top));
-                          const minutes = (relY / HOUR_HEIGHT) * 60;
-                          applyDrop(id, dayIso, minutes);
-                        }}
+                        className={`cal-time-col${isTimeDropTarget ? " is-drop-target" : ""}`}
                       >
                         {HOURS.map((h) => (
                           <div
@@ -1165,6 +1388,12 @@ export function CalendarView({
                           const task = ev.task;
                           const editable = isEditableLocalTask(task);
                           const isResizingThis = resizing?.taskId === task.id;
+                          const isMovingPreview = Boolean(
+                            movePreview && movePreview.task.id === task.id,
+                          );
+                          const isUnschedulingSource = Boolean(
+                            isUnschedulingTarget && moveDrag?.task.id === task.id,
+                          );
                           const effectiveEnd = isResizingThis ? resizing.endMin : ev.endMin;
                           const height = isResizingThis
                             ? Math.max(((effectiveEnd - ev.startMin) / 60) * HOUR_HEIGHT, 22)
@@ -1174,17 +1403,13 @@ export function CalendarView({
                           return (
                             <div
                               key={task.id}
-                              draggable={editable && !isResizingThis}
-                              onDragStart={(e) => startDrag(e, task)}
-                              onDragEnd={() => {
-                                setDraggedTaskId(null);
-                                setDropDayIso(null);
-                              }}
+                              onPointerDown={(e) => beginTaskMoveDrag(e, task, ev.span)}
                               onClick={(e) => {
                                 e.stopPropagation();
+                                if (justResizedRef.current) return;
                                 onSelectTask(task);
                               }}
-                              className={`cal-timed-card${task.completed ? " done" : ""}${task.notionId ? " is-notion" : ""}${selectedTaskId === task.id ? " is-selected" : ""}`}
+                              className={`cal-timed-card${task.completed ? " done" : ""}${task.notionId ? " is-notion" : ""}${selectedTaskId === task.id ? " is-selected" : ""}${isMovingPreview ? " is-moving-preview" : ""}${isUnschedulingSource ? " is-dragging-source" : ""}`}
                               style={{
                                 top: `${ev.top}px`,
                                 height: `${height}px`,
@@ -1236,36 +1461,66 @@ export function CalendarView({
         </div>
 
         {showUnscheduled && (
-          <aside className="cal-unscheduled" aria-label={l.t("未排期任务")}>
+          <aside
+            className={`cal-unscheduled${isUnschedulingTarget ? " is-drop-target" : ""}`}
+            aria-label={l.t("未排期任务")}
+          >
             <div className="cal-unscheduled-head">
               <h3>{l.t("未排期任务")}</h3>
               <span className="group-count">{l.number(unscheduled.length)}</span>
             </div>
             <p className="cal-unscheduled-hint">{l.t("拖动任务到日历格子即可快速排期")}</p>
             <div className="cal-unscheduled-list">
+              {isUnschedulingTarget && (
+                <div className="cal-unscheduled-drop-cue">
+                  {l.t("松开即可清除日期并移至未排期")}
+                </div>
+              )}
               {unscheduled.length === 0 ? (
                 <div className="board-empty">{l.t("全部本地任务均已排期")}</div>
               ) : (
-                unscheduled.map((task) => (
-                  <div
-                    key={task.id}
-                    draggable
-                    onDragStart={(e) => startDrag(e, task)}
-                    onDragEnd={() => {
-                      setDraggedTaskId(null);
-                      setDropDayIso(null);
-                    }}
-                    onClick={() => onSelectTask(task)}
-                    className={`cal-unscheduled-card${selectedTaskId === task.id ? " is-selected" : ""}`}
-                  >
-                    <span className="cal-pill-title">{task.title}</span>
-                  </div>
-                ))
+                unscheduled.map((task) => {
+                  const isDraggingSource = Boolean(moveDrag?.active && moveDrag.task.id === task.id);
+                  return (
+                    <div
+                      key={task.id}
+                      onPointerDown={(e) => beginTaskMoveDrag(e, task, null)}
+                      onClick={() => {
+                        if (justResizedRef.current) return;
+                        onSelectTask(task);
+                      }}
+                      className={`cal-unscheduled-card${selectedTaskId === task.id ? " is-selected" : ""}${isDraggingSource ? " is-dragging-source" : ""}`}
+                    >
+                      <span className="cal-pill-title">{task.title}</span>
+                    </div>
+                  );
+                })
               )}
             </div>
           </aside>
         )}
       </div>
+
+      {moveDrag?.active && (
+        <div
+          className="cal-drag-ghost"
+          style={{ left: `${moveDrag.clientX}px`, top: `${moveDrag.clientY}px` }}
+          aria-hidden="true"
+        >
+          <span className="cal-drag-ghost-title">{moveDrag.task.title}</span>
+          {isUnschedulingTarget ? (
+            <span className="cal-drag-ghost-meta">{l.t("移至未排期")}</span>
+          ) : movePreview ? (
+            <span className="cal-drag-ghost-meta">
+              {movePreview.endDate > movePreview.startDate
+                ? `${movePreview.startDate.slice(5)} → ${movePreview.endDate.slice(5)}`
+                : movePreview.isTimed && movePreview.startTime
+                  ? `${movePreview.startDate.slice(5)} ${movePreview.startTime}`
+                  : movePreview.startDate.slice(5)}
+            </span>
+          ) : null}
+        </div>
+      )}
     </div>
   );
 }

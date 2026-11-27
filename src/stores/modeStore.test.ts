@@ -1,10 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../services/tauriApi", () => ({
+  apiGetAlwaysOnTop: vi.fn(),
   apiGetWindowMode: vi.fn(),
   apiIsMainMaximized: vi.fn(),
+  apiListenAlwaysOnTop: vi.fn(),
   apiListenWindowMode: vi.fn(),
   apiMinimizeMain: vi.fn(),
+  apiSetAlwaysOnTop: vi.fn(),
   apiSetWindowMode: vi.fn(),
   apiToggleMaximizeMain: vi.fn(),
 }));
@@ -21,24 +24,37 @@ describe("modeStore", () => {
     window.localStorage.removeItem("sticky_calendar_focus_size");
     window.localStorage.removeItem("sticky_gallery_config");
     store = createModeStore();
+    vi.mocked(api.apiGetAlwaysOnTop).mockResolvedValue(false);
     vi.mocked(api.apiGetWindowMode).mockResolvedValue("workspace");
     vi.mocked(api.apiIsMainMaximized).mockResolvedValue(false);
+    vi.mocked(api.apiListenAlwaysOnTop).mockResolvedValue(() => {});
     vi.mocked(api.apiListenWindowMode).mockResolvedValue(() => {});
+    vi.mocked(api.apiSetAlwaysOnTop).mockImplementation(async (pinned) => pinned);
     vi.mocked(api.apiSetWindowMode).mockImplementation(async (mode) => mode);
     vi.mocked(api.apiToggleMaximizeMain).mockResolvedValue(true);
     vi.mocked(api.apiMinimizeMain).mockResolvedValue();
   });
 
-  it("hydrates initial mode and switches between workspace and sticky", async () => {
+  it("hydrates initial mode and alwaysOnTop and toggles across modes", async () => {
     const disconnect = store.getState().connectWindowMode();
     await Promise.resolve();
     await Promise.resolve();
     expect(store.getState().mode).toBe("workspace");
+    expect(store.getState().alwaysOnTop).toBe(false);
+
+    await store.getState().toggleAlwaysOnTop();
+    expect(api.apiSetAlwaysOnTop).toHaveBeenCalledWith(true);
+    expect(store.getState().alwaysOnTop).toBe(true);
 
     await store.getState().setMode("sticky");
     expect(api.apiSetWindowMode).toHaveBeenCalledWith("sticky");
     expect(store.getState().mode).toBe("sticky");
     expect(store.getState().maximized).toBe(false);
+    expect(store.getState().alwaysOnTop).toBe(true);
+
+    await store.getState().toggleAlwaysOnTop();
+    expect(api.apiSetAlwaysOnTop).toHaveBeenCalledWith(false);
+    expect(store.getState().alwaysOnTop).toBe(false);
 
     await store.getState().setMode("workspace");
     expect(api.apiSetWindowMode).toHaveBeenCalledWith("workspace");

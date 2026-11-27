@@ -42,6 +42,41 @@ export async function apiListenWindowMode(onMode: (mode: WindowMode) => void): P
   return listen<WindowMode>("window-mode-changed", (event) => onMode(event.payload));
 }
 
+const PREVIEW_ALWAYS_ON_TOP_KEY = "sticky_preview_always_on_top";
+const previewPinListeners = new Set<(pinned: boolean) => void>();
+
+export async function apiGetAlwaysOnTop(): Promise<boolean> {
+  if (!isTauri()) {
+    try {
+      return window.localStorage.getItem(PREVIEW_ALWAYS_ON_TOP_KEY) === "true";
+    } catch {
+      return false;
+    }
+  }
+  return invoke<boolean>("get_always_on_top");
+}
+
+export async function apiSetAlwaysOnTop(pinned: boolean): Promise<boolean> {
+  if (!isTauri()) {
+    try {
+      window.localStorage.setItem(PREVIEW_ALWAYS_ON_TOP_KEY, pinned ? "true" : "false");
+    } catch {
+      // Ignore storage unavailability in restricted contexts.
+    }
+    for (const listener of previewPinListeners) listener(pinned);
+    return pinned;
+  }
+  return invoke<boolean>("set_always_on_top", { pinned });
+}
+
+export async function apiListenAlwaysOnTop(onPinned: (pinned: boolean) => void): Promise<UnlistenFn> {
+  if (!isTauri()) {
+    previewPinListeners.add(onPinned);
+    return () => { previewPinListeners.delete(onPinned); };
+  }
+  return listen<boolean>("always-on-top-changed", (event) => onPinned(event.payload));
+}
+
 export async function apiMinimizeMain(): Promise<void> {
   if (!isTauri()) return;
   await invoke("minimize_main");

@@ -17,17 +17,20 @@ fn should_refresh(last: Option<Instant>, now: Instant, force: bool) -> bool {
     }
 }
 
-pub fn apply_always_on_top<R: Runtime>(window: &WebviewWindow<R>) -> Result<(), String> {
+pub fn apply_always_on_top<R: Runtime>(window: &WebviewWindow<R>, pinned: bool) -> Result<(), String> {
     window
-        .set_always_on_top(true)
+        .set_always_on_top(pinned)
         .map_err(|e| e.to_string())?;
     Ok(())
 }
 
 /// Enable normal desktop app window behavior for the Workspace main panel.
-pub fn enable_workspace_window_style<R: Runtime>(window: &WebviewWindow<R>) -> Result<(), String> {
+pub fn enable_workspace_window_style<R: Runtime>(
+    window: &WebviewWindow<R>,
+    pinned: bool,
+) -> Result<(), String> {
     use crate::window_state::{MIN_WORKSPACE_HEIGHT, MIN_WORKSPACE_WIDTH};
-    let _ = window.set_always_on_top(false);
+    let _ = apply_always_on_top(window, pinned);
     let _ = window.set_skip_taskbar(false);
     let _ = window.set_min_size(Some(tauri::LogicalSize::new(MIN_WORKSPACE_WIDTH, MIN_WORKSPACE_HEIGHT)));
     let _ = window.set_maximizable(true);
@@ -62,13 +65,16 @@ pub fn enable_workspace_window_style<R: Runtime>(window: &WebviewWindow<R>) -> R
     Ok(())
 }
 
-/// Enable pinned always-on-top compact Sticky Note window behavior.
-pub fn enable_sticky_window_style<R: Runtime>(window: &WebviewWindow<R>) -> Result<(), String> {
+/// Enable compact Sticky Note window behavior with persisted always-on-top preference.
+pub fn enable_sticky_window_style<R: Runtime>(
+    window: &WebviewWindow<R>,
+    pinned: bool,
+) -> Result<(), String> {
     if window.is_maximized().unwrap_or(false) {
         let _ = window.unmaximize();
     }
     let _ = window.set_min_size(Some(tauri::LogicalSize::new(100.0, 100.0)));
-    let _ = apply_always_on_top(window);
+    let _ = apply_always_on_top(window, pinned);
     let _ = window.set_skip_taskbar(true);
     let _ = disable_system_snap_assist(window);
     Ok(())

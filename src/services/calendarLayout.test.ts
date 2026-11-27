@@ -3,7 +3,9 @@ import type { Task } from "../types";
 import {
   addDays,
   applyDaySpanResizePreview,
+  applyTaskMovePreview,
   clampResizeEndDate,
+  computeMovedDateRange,
   diffDays,
   getMonthGridDays,
   getTaskSpan,
@@ -118,6 +120,56 @@ describe("calendarLayout", () => {
       endDate: "2026-11-25",
       isMultiDay: false,
       isTimed: true,
+    });
+  });
+
+  it("computes moved date ranges with grab offset and previews unscheduled & multi-day moves", () => {
+    expect(computeMovedDateRange("2026-11-25", "2026-11-25", "2026-11-27", 0)).toEqual({
+      startDate: "2026-11-27",
+      endDate: "2026-11-27",
+    });
+    // 3-day bar (Nov 24..26) grabbed on middle day (offset = 1) and hovered over Nov 28 -> Nov 27..29
+    expect(computeMovedDateRange("2026-11-24", "2026-11-26", "2026-11-28", 1)).toEqual({
+      startDate: "2026-11-27",
+      endDate: "2026-11-29",
+    });
+
+    const multi = getTaskSpan(baseTask({ id: "m1", startDate: "2026-11-24", endDate: "2026-11-26" }))!;
+    const unschedTask = baseTask({ id: "u1", title: "Unscheduled task" });
+
+    expect(applyTaskMovePreview([multi], null)).toEqual([multi]);
+
+    const movedMulti = applyTaskMovePreview([multi], {
+      task: multi.task,
+      startDate: "2026-11-27",
+      endDate: "2026-11-29",
+      startTime: null,
+      endTime: null,
+      isTimed: false,
+    });
+    expect(movedMulti).toHaveLength(1);
+    expect(movedMulti[0]).toMatchObject({
+      startDate: "2026-11-27",
+      endDate: "2026-11-29",
+      isMultiDay: true,
+      isTimed: false,
+    });
+
+    const scheduledPreview = applyTaskMovePreview([multi], {
+      task: unschedTask,
+      startDate: "2026-11-26",
+      endDate: "2026-11-26",
+      startTime: null,
+      endTime: null,
+      isTimed: false,
+    });
+    expect(scheduledPreview).toHaveLength(2);
+    expect(scheduledPreview[1]).toMatchObject({
+      task: unschedTask,
+      startDate: "2026-11-26",
+      endDate: "2026-11-26",
+      isMultiDay: false,
+      isTimed: false,
     });
   });
 });

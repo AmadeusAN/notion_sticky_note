@@ -37,6 +37,53 @@ export interface DaySpanResizePreview {
   previewEndDate: string;
 }
 
+export interface TaskMovePreview {
+  task: Task;
+  startDate: string;
+  endDate: string;
+  startTime: string | null;
+  endTime: string | null;
+  isTimed: boolean;
+}
+
+export function computeMovedDateRange(
+  origStartDate: string,
+  origEndDate: string,
+  hoveredDayIso: string,
+  grabOffsetDays: number,
+): { startDate: string; endDate: string } {
+  const spanLen = Math.max(0, diffDays(origStartDate, origEndDate));
+  const offset = Math.max(0, Math.min(spanLen, grabOffsetDays));
+  const startDate = addDays(hoveredDayIso, -offset);
+  const endDate = spanLen > 0 ? addDays(startDate, spanLen) : startDate;
+  return { startDate, endDate };
+}
+
+export function applyTaskMovePreview(
+  spans: readonly TaskSpan[],
+  preview: TaskMovePreview | null,
+): TaskSpan[] {
+  if (!preview) return spans as TaskSpan[];
+  const isMultiDay = preview.endDate > preview.startDate;
+  const isTimed = !isMultiDay && preview.isTimed && parseTimeToMinutes(preview.startTime) !== null;
+  const nextSpan: TaskSpan = {
+    task: preview.task,
+    startDate: preview.startDate,
+    endDate: preview.endDate,
+    startTime: preview.startTime,
+    endTime: preview.endTime,
+    isTimed,
+    isMultiDay,
+  };
+  let replaced = false;
+  const updated = spans.map((span) => {
+    if (span.task.id !== preview.task.id) return span;
+    replaced = true;
+    return nextSpan;
+  });
+  return replaced ? updated : [...updated, nextSpan];
+}
+
 export function clampResizeEndDate(startDate: string, hoveredDayIso: string): string {
   if (!parseIsoDate(hoveredDayIso)) return startDate;
   if (!parseIsoDate(startDate)) return hoveredDayIso;
