@@ -5,7 +5,7 @@ vi.mock("../services/tauriApi", () => ({
   apiClearArchive: vi.fn(), apiCreateGroup: vi.fn(), apiDeleteGroup: vi.fn(),
   apiDeleteTask: vi.fn(), apiForceSync: vi.fn(), apiGetSyncState: vi.fn(),
   apiGetTaskView: vi.fn(), apiImportTasks: vi.fn(), apiListenSyncState: vi.fn(),
-  apiReorderGroups: vi.fn(), apiReorderTasks: vi.fn(), apiToggleTask: vi.fn(), apiUpdateTask: vi.fn(),
+  apiRenameGroup: vi.fn(), apiReorderGroups: vi.fn(), apiReorderTasks: vi.fn(), apiToggleTask: vi.fn(), apiUpdateTask: vi.fn(),
 }));
 import * as api from "../services/tauriApi";
 import { createTaskStore } from "./taskStore";

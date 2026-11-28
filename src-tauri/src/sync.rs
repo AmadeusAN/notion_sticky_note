@@ -19,12 +19,28 @@ pub struct SyncState {
     pub unresolved_count: usize,
     pub error: Option<NotionError>,
     pub data_changed: bool,
+    pub phase: String,
+    pub progress_completed: usize,
+    pub progress_total: usize,
+    pub progress_message: Option<String>,
 }
 
 impl Default for SyncState {
     fn default() -> Self {
-        Self { seq: 0, cycle_id: 0, status: "unconfigured".into(), last_successful_at: None,
-            pending_count: 0, unresolved_count: 0, error: None, data_changed: false }
+        Self {
+            seq: 0,
+            cycle_id: 0,
+            status: "unconfigured".into(),
+            last_successful_at: None,
+            pending_count: 0,
+            unresolved_count: 0,
+            error: None,
+            data_changed: false,
+            phase: "idle".into(),
+            progress_completed: 0,
+            progress_total: 0,
+            progress_message: None,
+        }
     }
 }
 
@@ -150,6 +166,12 @@ impl SyncEngine {
             .map_err(|_| local_error("storage", crate::language::text("Unable to read the pending write queue.", "无法读取待回写队列")))
     }
 
+    async fn dirty_count(&self) -> usize {
+        database_work(self.db.clone(), Database::dirty_task_count)
+            .await
+            .unwrap_or(0)
+    }
+
     async fn run(&self) {
         let started_at = Instant::now();
         let (mut configured, mut database_identity) = match self.context().await {
@@ -159,13 +181,17 @@ impl SyncEngine {
                 (false, String::new())
             }
         };
+        let initial_dirty = self.dirty_count().await;
         match self.summary().await {
             Ok((pending, unresolved, _)) => { self.publish(|state| {
                 if state.error.is_none() { state.status = if configured { "idle" } else { "unconfigured" }.into(); }
-                state.pending_count = pending; state.unresolved_count = unresolved;
+                state.pending_count = pending + initial_dirty;
+                state.unresolved_count = unresolved;
+                state.phase = "idle".into();
             }); }
-            Err(error) => { self.publish(|state| { state.status = "error".into(); state.error = Some(error); }); }
+            Err(error) => { self.publish(|state| { state.status = "error".into(); state.error = Some(error); state.phase = "error".into(); }); }
         }
+        // Single one-shot initial sync on startup; no periodic polling afterward.
         let mut deadline = configured.then(|| started_at + Duration::from_secs(2));
         let mut retry_until: Option<Instant> = None;
         let mut retry_forever = false;
@@ -188,17 +214,22 @@ impl SyncEngine {
                         configured = config.is_configured();
                         deadline = configured.then(Instant::now);
                         let summary = self.summary().await;
+                        let dirty = self.dirty_count().await;
                         self.publish(|state| {
                             state.status = if configured { "idle" } else { "unconfigured" }.into();
                             state.error = None;
+                            state.phase = "idle".into();
                             if switched { state.last_successful_at = None; }
                             match summary {
-                                Ok((pending, unresolved, _)) => { state.pending_count = pending; state.unresolved_count = unresolved; }
-                                Err(error) => { state.status = "error".into(); state.error = Some(error); }
+                                Ok((pending, unresolved, _)) => {
+                                    state.pending_count = pending + dirty;
+                                    state.unresolved_count = unresolved;
+                                }
+                                Err(error) => { state.status = "error".into(); state.error = Some(error); state.phase = "error".into(); }
                             }
                         });
                     }
-                    Err(error) => { self.publish(|state| { state.status = "error".into(); state.error = Some(error); }); }
+                    Err(error) => { self.publish(|state| { state.status = "error".into(); state.error = Some(error); state.phase = "error".into(); }); }
                 }
             }
             let now = Instant::now();
@@ -218,29 +249,15 @@ impl SyncEngine {
                 };
                 let work = self.run_round(id);
                 tokio::pin!(work);
-                let periodic = async move {
-                    match deadline {
-                        Some(deadline) => tokio::time::sleep_until(deadline).await,
-                        None => std::future::pending::<()>().await,
-                    }
-                };
-                tokio::pin!(periodic);
-                let mut periodic_joined = false;
                 let result = loop {
                     tokio::select! {
                         _ = self.cancelled() => return,
-                        _ = &mut periodic, if !periodic_joined => {
-                            periodic_joined = true;
-                            let mut requests = self.requests.lock().expect("sync request lock");
-                            if let Some(round) = requests.round.as_mut() {
-                                if !round.pulling { round.pull_requested = true; }
-                            }
-                        },
                         result = &mut work => break result,
                     }
                 };
                 if result.0 {
-                    deadline = configured.then(|| result.2 + Duration::from_secs(30));
+                    // Event-driven: stay quiet after pull completes unless explicitly woken.
+                    deadline = None;
                 }
                 if let Some(milliseconds) = result.1 {
                     retry_until = result.2.checked_add(Duration::from_millis(milliseconds));
@@ -276,12 +293,23 @@ impl SyncEngine {
         let valid_config = context.as_ref().is_ok_and(|(config, _)| config.is_configured());
         if valid_config {
             let summary = self.summary().await.unwrap_or((0, 0, 0));
+            let dirty = self.dirty_count().await;
+            let initial_total = summary.0 + dirty;
             self.publish(|state| {
-                state.cycle_id = id; state.status = "syncing".into(); state.error = None;
-                state.pending_count = summary.0; state.unresolved_count = summary.1;
+                state.cycle_id = id;
+                state.status = "syncing".into();
+                state.error = None;
+                state.pending_count = initial_total;
+                state.unresolved_count = summary.1;
+                state.phase = if initial_total > 0 { "pushing" } else { "pulling" }.into();
+                state.progress_completed = 0;
+                state.progress_total = initial_total;
+                state.progress_message = None;
             });
             let (config, version) = context.as_ref().expect("configured context");
-            error = self.push_pending(config, *version).await;
+            let (push_error, push_changed) = self.push_pending(config, *version, id).await;
+            error = push_error;
+            changed |= push_changed;
         } else if let Err(context_error) = &context {
             error = Some(context_error.clone());
         }
@@ -303,10 +331,27 @@ impl SyncEngine {
                     Err(_) => { error = Some(local_error("storage", crate::language::text("Unable to verify the sync configuration version.", "无法核对同步配置版本"))); false }
                 };
                 if can_pull && !error.as_ref().is_some_and(NotionError::stops_pushes) {
-                    match self.notion.query_tasks(config).await {
+                    self.publish(|state| {
+                        state.cycle_id = id;
+                        state.status = "syncing".into();
+                        state.phase = "pulling".into();
+                        state.progress_completed = 0;
+                        state.progress_total = 0;
+                        state.progress_message = None;
+                    });
+                    match self.notion.query_tasks_with_progress(config, |pulled_so_far| {
+                        self.publish(|state| {
+                            state.cycle_id = id;
+                            state.status = "syncing".into();
+                            state.phase = "pulling".into();
+                            state.progress_completed = pulled_so_far;
+                            state.progress_total = 0;
+                            state.progress_message = Some(pulled_so_far.to_string());
+                        });
+                    }).await {
                         Ok(remote) => {
                             let version = *version;
-                            match database_work(self.db.clone(), move |db| db.merge_notion_snapshot(&remote, version)).await {
+                            match database_work(self.db.clone(), move |db| db.merge_notion_snapshot_with_groups(&remote, version)).await {
                                 Ok(data_changed) => changed |= data_changed,
                                 Err(_) => { error.get_or_insert_with(|| local_error("storage", crate::language::text("The Notion snapshot could not be saved. The previous cache is preserved.", "Notion 快照未能保存，旧缓存仍保留"))); }
                             }
@@ -325,9 +370,11 @@ impl SyncEngine {
                     _ => {}
                 }
             }
-            let (pending, unresolved, _) = match self.summary().await {
-                Ok(summary) => summary,
-                Err(summary_error) => { error.get_or_insert(summary_error); (0, 0, 0) }
+            let summary = self.summary().await;
+            let dirty = self.dirty_count().await;
+            let (pending, unresolved, _) = match summary {
+                Ok(summary) => (summary.0 + dirty, summary.1, summary.2),
+                Err(summary_error) => { error.get_or_insert(summary_error); (dirty, 0, 0) }
             };
             let mut requests = self.requests.lock().expect("sync request lock");
             let round = requests.round.as_ref().expect("active sync round");
@@ -346,23 +393,43 @@ impl SyncEngine {
             state.cycle_id = id;
             state.status = if error.as_ref().is_some_and(|error| error.category == "storage") { "error" }
                 else if !valid_config { "unconfigured" } else if error.is_some() { "error" }
-                else if pulled { "ok" } else { "idle" }.into();
-            if valid_config && pulled && error.is_none() { state.last_successful_at = Some(chrono::Utc::now().timestamp_millis()); }
-            state.pending_count = pending_count; state.unresolved_count = unresolved_count;
-            state.error = error; state.data_changed = changed;
+                else if pulled || changed { "ok" } else { "idle" }.into();
+            if valid_config && (pulled || changed) && error.is_none() {
+                state.last_successful_at = Some(chrono::Utc::now().timestamp_millis());
+            }
+            state.pending_count = pending_count;
+            state.unresolved_count = unresolved_count;
+            state.error = error;
+            state.data_changed = changed;
+            state.phase = if state.status == "error" { "error" }
+                else if state.status == "ok" { "done" }
+                else { "idle" }.into();
+            state.progress_completed = 0;
+            state.progress_total = 0;
+            state.progress_message = None;
         });
         for waiter in round.waiters { let _ = waiter.send(result.clone()); }
         (pulled, retry, finished_at)
     }
 
-    async fn push_pending(&self, config: &NotionConfig, config_version: u64) -> Option<NotionError> {
+    async fn push_pending(&self, config: &NotionConfig, config_version: u64, cycle_id: u64) -> (Option<NotionError>, bool) {
         let database_identity = normalize_notion_id(&config.database_id);
         let mut attempted = HashSet::new();
+        let mut attempted_dirty: HashSet<(String, i64)> = HashSet::new();
         let mut first_error = None;
+        let mut data_changed = false;
+        let mut completed_steps = 0usize;
+
+        let initial_pending_len = database_work(self.db.clone(), Database::list_pending)
+            .await
+            .map_or(0, |v| v.len());
+        let initial_dirty_len = self.dirty_count().await;
+        let total_steps = initial_pending_len + initial_dirty_len;
+
         loop {
             let pending = match database_work(self.db.clone(), Database::list_pending).await {
                 Ok(pending) => pending,
-                Err(_) => return Some(local_error("storage", crate::language::text("Unable to read the pending write queue.", "无法读取待回写队列"))),
+                Err(_) => return (Some(local_error("storage", crate::language::text("Unable to read the pending write queue.", "无法读取待回写队列"))), data_changed),
             };
             let mut sent = false;
             for operation in pending {
@@ -385,12 +452,12 @@ impl SyncEngine {
                             }).await {
                                 Ok((true, mapping, page_id)) => (mapping, page_id),
                                 Ok((false, _, _)) => continue,
-                                Err(_) => return Some(local_error("storage", crate::language::text("Unable to save pending write source verification.", "无法保存待回写记录的来源验证"))),
+                                Err(_) => return (Some(local_error("storage", crate::language::text("Unable to save pending write source verification.", "无法保存待回写记录的来源验证"))), data_changed),
                             }
                         }
                         Ok(_) => continue,
                         Err(error) => {
-                            if error.stops_pushes() { return Some(error); }
+                            if error.stops_pushes() { return (Some(error), data_changed); }
                             first_error.get_or_insert(error);
                             continue;
                         }
@@ -403,23 +470,96 @@ impl SyncEngine {
                 match database_work(self.db.clone(), move |db| db.pending_for_send(op_id, revision, config_version)).await {
                     Ok(true) => {}
                     Ok(false) => continue,
-                    Err(_) => return Some(local_error("storage", crate::language::text("Unable to verify the pending write configuration version.", "无法核对待回写记录的配置版本"))),
+                    Err(_) => return (Some(local_error("storage", crate::language::text("Unable to verify the pending write configuration version.", "无法核对待回写记录的配置版本"))), data_changed),
                 }
                 match self.notion.set_done(config, &mapping, &page_id, operation.completed).await {
                     Ok(()) => {
                         if database_work(self.db.clone(), move |db| db.clear_pending(op_id, revision)).await.is_err() {
-                            return Some(local_error("storage", crate::language::text("Notion accepted the update, but the local acknowledgment could not be saved. It will be retried idempotently.", "远端已接收，但待回写确认未能落库；稍后将幂等重试")));
+                            return (Some(local_error("storage", crate::language::text("Notion accepted the update, but the local acknowledgment could not be saved. It will be retried idempotently.", "远端已接收，但待回写确认未能落库；稍后将幂等重试"))), data_changed);
                         }
+                        data_changed = true;
+                        completed_steps += 1;
+                        self.publish(|state| {
+                            state.cycle_id = cycle_id;
+                            state.status = "syncing".into();
+                            state.phase = "pushing".into();
+                            state.progress_completed = completed_steps.min(total_steps.max(completed_steps));
+                            state.progress_total = total_steps.max(completed_steps);
+                        });
                     }
                     Err(error) => {
-                        if error.stops_pushes() { return Some(error); }
+                        if error.stops_pushes() { return (Some(error), data_changed); }
                         first_error.get_or_insert(error);
                     }
                 }
             }
             if !sent { break; }
         }
-        first_error
+
+        // Now push dirty scheduled local/edited tasks (create_page or update_page).
+        loop {
+            let dirty = match database_work(self.db.clone(), Database::list_dirty_tasks).await {
+                Ok(dirty) => dirty,
+                Err(_) => return (Some(local_error("storage", crate::language::text("Unable to read pending local tasks.", "无法读取待同步本地任务"))), data_changed),
+            };
+            let mut sent = false;
+            for (task, group_name) in dirty {
+                if !attempted_dirty.insert((task.id.clone(), task.updated_time)) {
+                    continue;
+                }
+                sent = true;
+                match database_work(self.db.clone(), Database::notion_version).await {
+                    Ok(v) if v == config_version => {}
+                    Ok(_) => {
+                        configuration_changed_error(&mut first_error);
+                        return (first_error, data_changed);
+                    }
+                    Err(_) => {
+                        return (Some(local_error("storage", crate::language::text("Unable to verify the sync configuration version.", "无法核对同步配置版本"))), data_changed);
+                    }
+                }
+                let result_page_id = match task.notion_id.as_deref() {
+                    Some(page_id) => {
+                        self.notion
+                            .update_page(config, page_id, &task, group_name.as_deref())
+                            .await
+                            .map(|_| page_id.to_string())
+                    }
+                    None => {
+                        self.notion
+                            .create_page(config, &task, group_name.as_deref())
+                            .await
+                    }
+                };
+                match result_page_id {
+                    Ok(remote_page_id) => {
+                        let task_id = task.id.clone();
+                        let updated_time = task.updated_time;
+                        if database_work(self.db.clone(), move |db| {
+                            db.mark_task_synced(&task_id, &remote_page_id, updated_time)
+                        }).await.is_err() {
+                            return (Some(local_error("storage", crate::language::text("Notion accepted the update, but local sync state could not be saved.", "Notion 已接收，但本地同步状态未能保存"))), data_changed);
+                        }
+                        data_changed = true;
+                        completed_steps += 1;
+                        self.publish(|state| {
+                            state.cycle_id = cycle_id;
+                            state.status = "syncing".into();
+                            state.phase = "pushing".into();
+                            state.progress_completed = completed_steps.min(total_steps.max(completed_steps));
+                            state.progress_total = total_steps.max(completed_steps);
+                        });
+                    }
+                    Err(error) => {
+                        if error.stops_pushes() { return (Some(error), data_changed); }
+                        first_error.get_or_insert(error);
+                    }
+                }
+            }
+            if !sent { break; }
+        }
+
+        (first_error, data_changed)
     }
 }
 
@@ -469,7 +609,8 @@ mod tests {
             completed: false, progress: None, remain: None, date: None,
             start_date: None, end_date: None, start_time: None, end_time: None,
             reminder_at: None, reminded_at: None, tags: Vec::new(),
-            updated_time: 1, group_id: crate::models::NOTION_GROUP_ID.into(), position: 0 };
+            updated_time: 1, group_id: crate::models::NOTION_GROUP_ID.into(), position: 0,
+            sync_status: "synced".into() };
         db.merge_notion_snapshot(&[task.clone()], db.notion_context().unwrap().1).unwrap();
         task
     }
@@ -736,25 +877,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn full_sync_deadline_is_thirty_seconds_after_completion() {
+    async fn event_driven_sync_does_not_poll_when_idle() {
         let database = TestDb::new();
-        let (sent, received) = oneshot::channel();
-        let mut sent = Some(sent);
-        let mut count = 0;
-        let fixture = Fixture::new(move |_| {
-            count += 1;
-            if count == 2 { let _ = sent.take().unwrap().send(()); }
-            Reply::ok(snapshot(vec![]))
-        });
+        let fixture = Fixture::new(|_| Reply::ok(snapshot(vec![])));
         let (engine, worker) = run(database.db(), &fixture);
         assert_eq!(engine.force_sync().await.status, "ok");
         tokio::time::pause();
-        tokio::time::advance(Duration::from_secs(29)).await;
+        tokio::time::advance(Duration::from_secs(300)).await;
         tokio::task::yield_now().await;
         assert_eq!(fixture.requests().len(), 1);
-        tokio::time::advance(Duration::from_secs(1)).await;
-        tokio::time::resume();
-        received.await.unwrap();
         engine.stop(); worker.await.unwrap();
     }
 
@@ -770,59 +901,72 @@ mod tests {
         engine.wake_pending();
         loop {
             let state = states.borrow().clone();
-            if state.cycle_id > 0 && state.status == "idle" && state.pending_count == 0 { break; }
+            if state.cycle_id > 0 && state.status == "ok" && state.pending_count == 0 { break; }
             states.changed().await.unwrap();
         }
         let requests = fixture.requests();
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].method, "PATCH");
-        assert!(engine.get_state().last_successful_at.is_none());
+        assert!(engine.get_state().last_successful_at.is_some());
         engine.stop(); worker.await.unwrap();
     }
 
     #[tokio::test]
-    async fn periodic_deadline_joins_an_existing_push_round() {
+    async fn wake_pending_pushes_scheduled_local_task_and_skips_unscheduled() {
         let database = TestDb::new();
         let db = database.db();
-        seed(&db);
-        let (started, arrived) = oneshot::channel();
-        let mut started = Some(started);
-        let (release, blocked) = std::sync::mpsc::channel();
-        let mut completed = false;
-        let fixture = Fixture::new(move |request| {
-            if request.method == "PATCH" {
-                completed = request.body["properties"]["done?"]["checkbox"].as_bool().unwrap();
-                if let Some(started) = started.take() {
-                    let _ = started.send(());
-                    let _ = blocked.recv();
-                }
-                Reply::ok(serde_json::json!({}))
-            } else { Reply::ok(snapshot(vec![page(PAGE, completed)])) }
+        let group = db.create_group("Research").unwrap();
+        let unscheduled = db.import_local_tasks_with_schedule(
+            vec!["Unscheduled item".into()],
+            Some(&group.id),
+            None,
+            None,
+        ).unwrap().tasks.remove(0);
+        assert_eq!(unscheduled.sync_status, "unscheduled");
+
+        let scheduled = db.import_local_tasks_with_schedule(
+            vec!["Scheduled item".into()],
+            Some(&group.id),
+            None,
+            Some(crate::models::TaskScheduleInput {
+                start_date: Some("2026-11-28".into()),
+                end_date: None,
+                start_time: None,
+                end_time: None,
+                reminder_at: None,
+            }),
+        ).unwrap().tasks.remove(0);
+        assert_eq!(scheduled.sync_status, "pending");
+
+        let fixture = Fixture::new(|request| {
+            if request.method == "POST" && request.path == "/v1/pages" {
+                Reply::ok(serde_json::json!({"id": PAGE}))
+            } else {
+                Reply::ok(snapshot(vec![]))
+            }
         });
         let (engine, worker) = run(db.clone(), &fixture);
-        assert_eq!(engine.force_sync().await.status, "ok");
-        tokio::time::pause();
-        tokio::time::advance(Duration::from_secs(20)).await;
-        tokio::time::resume();
-        db.toggle_task(PAGE).unwrap();
-        engine.wake_pending();
-        arrived.await.unwrap();
-        let push_round = engine.get_state().cycle_id;
         let mut states = engine.state.subscribe();
-        tokio::time::pause();
-        tokio::time::advance(Duration::from_secs(10)).await;
-        tokio::task::yield_now().await;
-        tokio::time::resume();
-        release.send(()).unwrap();
+        engine.wake_pending();
         loop {
             let state = states.borrow().clone();
-            if state.cycle_id >= push_round && state.status == "ok" {
-                assert_eq!(state.cycle_id, push_round);
-                break;
-            }
+            if state.cycle_id > 0 && state.status == "ok" && state.pending_count == 0 { break; }
             states.changed().await.unwrap();
         }
-        assert_eq!(fixture.requests().iter().filter(|request| request.method == "POST").count(), 2);
+        let requests = fixture.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "POST");
+        assert_eq!(requests[0].path, "/v1/pages");
+        assert_eq!(requests[0].body["properties"]["Tags"]["select"]["name"], "event");
+        assert_eq!(requests[0].body["properties"]["Tags 2"]["multi_select"][0]["name"], "Research");
+
+        let reloaded_scheduled = db.get_task(&scheduled.id).unwrap().unwrap();
+        assert_eq!(reloaded_scheduled.sync_status, "synced");
+        assert!(reloaded_scheduled.notion_id.is_some());
+
+        let reloaded_unscheduled = db.get_task(&unscheduled.id).unwrap().unwrap();
+        assert_eq!(reloaded_unscheduled.sync_status, "unscheduled");
+        assert!(reloaded_unscheduled.notion_id.is_none());
         engine.stop(); worker.await.unwrap();
     }
 

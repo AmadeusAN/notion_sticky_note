@@ -537,7 +537,25 @@ const english = {
   "自定义图标必须是有效的图片数据。": "Custom icon must be an image data URL.",
   "请先上传自定义图标图片。": "Upload an icon image before selecting the custom slot.",
   "图标像素尺寸无效。": "Invalid icon buffer size.",
-  "应用图标切换失败。": "Unable to apply application icon."
+  "应用图标切换失败。": "Unable to apply application icon.",
+  "任务组属性名（Tags 2）": "Group property (Tags 2)",
+  "默认事件标签属性": "Default event tag property",
+  "新增任务默认事件标签值": "Default event tag value for new tasks",
+  "将本地已排期任务自动双向同步到 Notion（开启后立即同步已有排期任务）": "Automatically sync scheduled local tasks two-way with Notion (syncs existing scheduled tasks immediately when enabled)",
+  "按需触发全量同步：拉取含历史已完成在内的全部日期任务；本地新建排期任务默认写入 Tags（event）与 Tags 2（分组）。未排期任务保持仅本地可见。": "Event-driven full sync: pulls all dated tasks including past completed history; new scheduled tasks write Tags (event) and Tags 2 (group). Unscheduled tasks stay local only.",
+  "重命名分组": "Rename group",
+  "分组已重命名为「{name}」": "Group renamed to “{name}”",
+  "仅支持重命名自定义本地分组": "Only custom local groups can be renamed.",
+  "已存在同名分组": "A group with this name already exists.",
+  "已同步到 Notion": "Synced to Notion",
+  "等待同步到 Notion": "Pending Notion sync",
+  "未排期（暂不同步）": "Unscheduled (local only)",
+  "仅本地保存": "Saved locally",
+  "未设置日期，仅保存在本地（拖入日历后开启同步）": "No date set — saved locally only (drag to calendar to enable sync)",
+  "已拉取 {count} 条…": "Pulled {count}…",
+  "待同步 {count}": "{count} pending",
+  "无法读取待同步本地任务": "Unable to read pending local tasks.",
+  "Notion 已接收，但本地同步状态未能保存": "Notion accepted the update, but local sync state could not be saved."
 } as const;
 export type MessageKey = keyof typeof english;
 const chinese: Partial<Record<MessageKey, string>> = {

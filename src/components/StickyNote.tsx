@@ -44,7 +44,8 @@ export function StickyNote({ onOpenSettings, onSwitchToWorkspace, dock }: Props)
   const fallbackFocus = useRef<HTMLButtonElement>(null);
 
   const openCount = useMemo(() => tasks.reduce((count, task) => count + Number(!task.completed), 0), [tasks]);
-  const statusClass = status === "syncing" ? "syncing" : status === "error" ? "error" : "";
+  const isSynced = status === "ok" && syncState.pendingCount === 0;
+  const statusClass = status === "syncing" ? "syncing" : status === "error" ? "error" : isSynced ? "ok" : "";
   const dockClass =
     dock.phase !== "free" && dock.edge
       ? `dock-${dock.phase} dock-edge-${dock.edge} dock-handle-${dockHandle}`
@@ -90,14 +91,18 @@ export function StickyNote({ onOpenSettings, onSwitchToWorkspace, dock }: Props)
           </button>
           <button
             type="button"
-            className="icon-btn"
-            title={l.t("同步")}
+            className={`icon-btn${isSynced ? " is-synced" : ""}`}
+            title={isSynced ? l.t("已同步") : l.t("同步")}
             onClick={() => void forceSync()}
             aria-label={l.t("同步")}
             disabled={status === "syncing" || syncRequestPending}
             aria-busy={status === "syncing" || syncRequestPending}
           >
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 8a8 8 0 1 0 .4 7M20 3v5h-5" /></svg>
+            {isSynced ? (
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5 9.5 17 19 7.5" /></svg>
+            ) : (
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 8a8 8 0 1 0 .4 7M20 3v5h-5" /></svg>
+            )}
           </button>
           <button
             type="button"

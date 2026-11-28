@@ -70,7 +70,7 @@ export function BoardView({
                 setDraggingId(null);
                 if (!taskId) return;
                 const dragged = tasks.find((t) => t.id === taskId);
-                if (!dragged || dragged.groupId === group.id || dragged.notionId) return;
+                if (!dragged || dragged.groupId === group.id) return;
                 void onMoveTask(taskId, group.id);
               }}
             >

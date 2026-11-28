@@ -31,7 +31,8 @@ const snapshot = (revision = 4): SettingsSnapshot => ({
     noteBg: themes.paper.background, noteFg: themes.paper.foreground,
     noteAccent: themes.paper.accent, notePop: themes.paper.pop,
     notion: { token: "fixture", databaseId: "fixture", doneProperty: "done?", titleProperty: "Name",
-      dateProperty: "Date", statusProperty: "Status", statusDoneValue: "Done", statusTodoValue: "Not started" },
+      dateProperty: "Date", statusProperty: "Status", statusDoneValue: "Done", statusTodoValue: "Not started",
+      syncLocalToNotion: true, groupProperty: "Tags 2", defaultTagProperty: "Tags", defaultTagValue: "event" },
   },
   appearanceSaveState: { revision, status: "saved", error: null },
 });

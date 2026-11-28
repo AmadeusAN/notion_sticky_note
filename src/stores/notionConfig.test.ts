@@ -23,6 +23,10 @@ const config: NotionConfig = {
   statusProperty: "Status",
   statusDoneValue: "Done",
   statusTodoValue: "Not started",
+  syncLocalToNotion: true,
+  groupProperty: "Tags 2",
+  defaultTagProperty: "Tags",
+  defaultTagValue: "event",
 };
 
 function deferred<T>() {

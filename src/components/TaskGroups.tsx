@@ -180,7 +180,7 @@ const TaskGroup = memo(function TaskGroup({
             key={task.id}
             task={task}
             onDelete={isLocal || isArchive ? onConfirmTask : undefined}
-            onEdit={isLocal ? onEditTask : undefined}
+            onEdit={!isArchive ? onEditTask : undefined}
             canDrag={canDragTasks}
             sortable={canDragTasks ? taskSortable.getItemProps(task.id) : undefined}
           />
@@ -233,6 +233,7 @@ export const TaskGroups = memo(function TaskGroups({ onAddTasks, onConfirmGroup,
           onAddTasks={onAddTasks}
           onConfirmGroup={onConfirmGroup}
           onConfirmTask={onConfirmTask}
+          onEditTask={onEditTask}
         />
       ))}
       {localGroups.length > 0 && (

@@ -69,10 +69,10 @@ impl Database {
         let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
         let version: u32 = tx.query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(|e| e.to_string())?;
-        if version == 3 {
+        if version == 4 {
             return Ok(());
         }
-        if version > 3 {
+        if version > 4 {
             return Err(crate::language::text("This database was created by a newer version of Sticky Note.", "数据库版本高于当前应用支持的版本").into());
         }
         if version == 0 {
@@ -95,7 +95,8 @@ impl Database {
                     start_time TEXT,
                     end_time TEXT,
                     reminder_at INTEGER,
-                    reminded_at INTEGER
+                    reminded_at INTEGER,
+                    notion_sync_dirty INTEGER NOT NULL DEFAULT 0
                  );
                  CREATE TABLE IF NOT EXISTS settings (
                     key TEXT PRIMARY KEY,
@@ -194,6 +195,18 @@ impl Database {
             }
             Self::backfill_task_dates_on(&tx)?;
             tx.execute_batch("PRAGMA user_version = 3;")
+                .map_err(|e| e.to_string())?;
+        }
+        if version < 4 {
+            let has_dirty: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('tasks') WHERE name = 'notion_sync_dirty')",
+                [], |row| row.get(0),
+            ).map_err(|e| e.to_string())?;
+            if !has_dirty {
+                tx.execute_batch("ALTER TABLE tasks ADD COLUMN notion_sync_dirty INTEGER NOT NULL DEFAULT 0")
+                    .map_err(|e| e.to_string())?;
+            }
+            tx.execute_batch("PRAGMA user_version = 4;")
                 .map_err(|e| e.to_string())?;
         }
         tx.commit().map_err(|e| e.to_string())
@@ -470,13 +483,41 @@ impl Database {
         if database_changed {
             tx.execute("DELETE FROM tasks WHERE group_id = ?1", params![NOTION_GROUP_ID])
                 .map_err(|e| e.to_string())?;
+            tx.execute(
+                "UPDATE tasks SET notion_id = NULL WHERE group_id != ?1",
+                params![NOTION_GROUP_ID],
+            )
+            .map_err(|e| e.to_string())?;
         }
         if old != *config {
             Self::put_setting_on(&tx, "notion", &raw)?;
             Self::bump_version(&tx, "notion_config_version")?;
         }
+        if config.is_configured()
+            && config.sync_local_to_notion
+            && (!old.is_configured() || !old.sync_local_to_notion || database_changed)
+        {
+            Self::mark_all_scheduled_unsynced_dirty_on(&tx)?;
+        }
         tx.commit().map_err(|e| e.to_string())?;
         Ok(SaveNotionConfigResult::Saved)
+    }
+
+    pub fn mark_all_scheduled_unsynced_dirty(&self) -> Result<usize, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        Self::mark_all_scheduled_unsynced_dirty_on(&conn)
+    }
+
+    fn mark_all_scheduled_unsynced_dirty_on(conn: &Connection) -> Result<usize, String> {
+        conn.execute(
+            "UPDATE tasks
+             SET notion_sync_dirty = 1
+             WHERE notion_id IS NULL
+               AND start_date IS NOT NULL
+               AND TRIM(start_date) != ''",
+            [],
+        )
+        .map_err(|e| e.to_string())
     }
 
     pub fn save_appearance(&self, appearance: &AppearanceSettings) -> Result<bool, String> {
@@ -716,16 +757,55 @@ impl Database {
         Ok(normalized)
     }
 
+    fn compute_sync_status(
+        notion_id: Option<&str>,
+        start_date: Option<&str>,
+        dirty: bool,
+        pending: bool,
+    ) -> String {
+        if pending || dirty {
+            "pending".into()
+        } else if notion_id.is_some() {
+            "synced".into()
+        } else if start_date.is_none() {
+            "unscheduled".into()
+        } else {
+            "local".into()
+        }
+    }
+
+    fn pending_sets_on(conn: &Connection) -> Result<(HashSet<String>, HashSet<String>), String> {
+        let mut task_ids = HashSet::new();
+        let mut page_ids = HashSet::new();
+        let mut stmt = conn
+            .prepare("SELECT task_id, page_id FROM pending_ops")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+            })
+            .map_err(|e| e.to_string())?;
+        for row in rows {
+            let (task_id, page_id) = row.map_err(|e| e.to_string())?;
+            task_ids.insert(task_id);
+            if let Some(page) = page_id.filter(|v| !v.trim().is_empty()) {
+                page_ids.insert(normalize_notion_id(&page));
+            }
+        }
+        Ok((task_ids, page_ids))
+    }
+
     pub fn list_tasks(&self) -> Result<Vec<Task>, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         Self::tasks_on(&conn, false)
     }
 
     fn tasks_on(conn: &Connection, notion_only: bool) -> Result<Vec<Task>, String> {
+        let (pending_tasks, pending_pages) = Self::pending_sets_on(conn)?;
         let mut stmt = conn
             .prepare(
                 "SELECT id, notion_id, title, completed, progress, remain, date, tags, updated_time, group_id, position,
-                        start_date, end_date, start_time, end_time, reminder_at, reminded_at
+                        start_date, end_date, start_time, end_time, reminder_at, reminded_at, notion_sync_dirty
                  FROM tasks WHERE (?1 = 0 OR group_id = 'notion')
                  ORDER BY completed ASC, CASE WHEN position > 0 THEN 0 ELSE 1 END ASC, position ASC, updated_time DESC, rowid ASC",
             )
@@ -736,7 +816,16 @@ impl Database {
 
         let mut tasks = Vec::new();
         for row in rows {
-            tasks.push(row.map_err(|e| e.to_string())?);
+            let mut task = row.map_err(|e| e.to_string())?;
+            if pending_tasks.contains(&task.id)
+                || task
+                    .notion_id
+                    .as_deref()
+                    .is_some_and(|p| pending_pages.contains(&normalize_notion_id(p)))
+            {
+                task.sync_status = "pending".into();
+            }
+            tasks.push(task);
         }
         Ok(tasks)
     }
@@ -751,8 +840,8 @@ impl Database {
         let tags = serde_json::to_string(&task.tags).map_err(|e| e.to_string())?;
         let changed = conn.execute(
             "INSERT INTO tasks(id, notion_id, title, completed, progress, remain, date, tags, updated_time, group_id,
-                               start_date, end_date, start_time, end_time, reminder_at, reminded_at)
-             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+                               start_date, end_date, start_time, end_time, reminder_at, reminded_at, notion_sync_dirty)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, 0)
              ON CONFLICT(id) DO UPDATE SET
                notion_id=excluded.notion_id,
                title=excluded.title,
@@ -766,8 +855,9 @@ impl Database {
                start_date=excluded.start_date,
                end_date=excluded.end_date,
                start_time=excluded.start_time,
-               end_time=excluded.end_time
-             WHERE tasks.group_id = excluded.group_id",
+               end_time=excluded.end_time,
+               notion_sync_dirty=0
+             WHERE tasks.notion_id IS NOT NULL OR tasks.group_id = excluded.group_id",
             params![
                 id,
                 notion_id,
@@ -794,10 +884,19 @@ impl Database {
         Ok(())
     }
 
-    /// Commit a complete Notion snapshot, overlaying only durable checkbox intents.
+    /// Commit a complete Notion snapshot, overlaying durable intents and mapping Tags 2 to local groups.
     pub fn merge_notion_snapshot(
         &self,
         tasks: &[Task],
+        expected_config_version: u64,
+    ) -> Result<bool, String> {
+        let paired: Vec<(Task, Option<String>)> = tasks.iter().map(|t| (t.clone(), None)).collect();
+        self.merge_notion_snapshot_with_groups(&paired, expected_config_version)
+    }
+
+    pub fn merge_notion_snapshot_with_groups(
+        &self,
+        items: &[(Task, Option<String>)],
         expected_config_version: u64,
     ) -> Result<bool, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
@@ -807,11 +906,25 @@ impl Database {
         }
         let config = Self::notion_config_on(&tx)?;
         let database_id = normalize_notion_id(&config.database_id);
-        let existing: HashMap<_, _> = Self::tasks_on(&tx, true)?.into_iter()
+        let existing: HashMap<_, _> = Self::tasks_on(&tx, false)?.into_iter()
             .map(|task| (task.id.clone(), task)).collect();
         let page_ids: HashMap<_, _> = existing.values().filter_map(|task|
             task.notion_id.as_ref().map(|page| (normalize_notion_id(page), task.id.as_str()))
         ).collect();
+        let dirty_ids: HashSet<String> = {
+            let mut stmt = tx
+                .prepare("SELECT id FROM tasks WHERE notion_sync_dirty != 0")
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(|e| e.to_string())?;
+            rows.collect::<Result<HashSet<String>, _>>()
+                .map_err(|e| e.to_string())?
+        };
+        let mut local_groups: Vec<Group> = Self::groups_on(&tx)?
+            .into_iter()
+            .filter(|g| g.kind == "local")
+            .collect();
         // Read after acquiring the committing transaction, never before HTTP.
         let pending = Self::pending_on(&tx)?;
         let mut pending_pages = HashMap::new();
@@ -825,10 +938,10 @@ impl Database {
                 pending_pages.insert(normalize_notion_id(page), op.completed);
             }
         }
-        let mut seen_pages = HashSet::with_capacity(tasks.len());
-        let mut seen_ids = HashSet::with_capacity(tasks.len());
+        let mut seen_pages = HashSet::with_capacity(items.len());
+        let mut seen_ids = HashSet::with_capacity(items.len());
         let mut changed = false;
-        for remote in tasks {
+        for (remote, group_tag) in items {
             if remote.group_id != NOTION_GROUP_ID {
                 return Err(crate::language::text("A Notion snapshot cannot contain local or archived tasks.", "Notion 快照不能包含本地或归档任务").into());
             }
@@ -841,10 +954,34 @@ impl Database {
             if !seen_ids.insert(id) {
                 return Err(crate::language::text("The Notion snapshot contains duplicate task identities.", "Notion 快照包含重复任务身份").into());
             }
+            seen_pages.insert(page.clone());
+            if dirty_ids.contains(id) {
+                continue;
+            }
+            let target_group_id = match group_tag.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                Some(name) => {
+                    let existing_gid = local_groups
+                        .iter()
+                        .find(|g| g.name.trim().eq_ignore_ascii_case(name))
+                        .map(|g| g.id.clone());
+                    match existing_gid {
+                        Some(gid) => gid,
+                        None => {
+                            let created = Self::insert_group(&tx, name)?;
+                            changed = true;
+                            let gid = created.id.clone();
+                            local_groups.push(created);
+                            gid
+                        }
+                    }
+                }
+                None => NOTION_GROUP_ID.to_string(),
+            };
             let completed = pending_pages.get(&page).or_else(|| pending_tasks.get(id))
                 .copied().unwrap_or(remote.completed);
             let unchanged = existing.get(id).is_some_and(|saved|
                 saved.notion_id.as_deref() == Some(page.as_str())
+                    && saved.group_id == target_group_id
                     && saved.completed == completed
                     && saved.title == remote.title
                     && saved.progress == remote.progress
@@ -858,17 +995,22 @@ impl Database {
                     && saved.updated_time == remote.updated_time
             );
             if !unchanged {
-                Self::upsert_task_on(&tx, remote, id, Some(&page), completed)?;
+                let mut resolved = remote.clone();
+                resolved.group_id = target_group_id;
+                Self::upsert_task_on(&tx, &resolved, id, Some(&page), completed)?;
                 changed = true;
             }
-            seen_pages.insert(page);
         }
         for task in existing.values() {
-            let protected = pending_tasks.contains_key(task.id.as_str())
+            if task.notion_id.is_none() {
+                continue;
+            }
+            let protected = dirty_ids.contains(&task.id)
+                || pending_tasks.contains_key(task.id.as_str())
                 || task.notion_id.as_ref().is_some_and(|page| pending_pages.contains_key(&normalize_notion_id(page)));
             if !seen_ids.contains(task.id.as_str()) && !protected {
-                tx.execute("DELETE FROM tasks WHERE id = ?1 AND group_id = ?2",
-                    params![task.id, NOTION_GROUP_ID]).map_err(|e| e.to_string())?;
+                tx.execute("DELETE FROM tasks WHERE id = ?1 AND notion_id IS NOT NULL",
+                    params![task.id]).map_err(|e| e.to_string())?;
                 changed = true;
             }
         }
@@ -882,22 +1024,43 @@ impl Database {
     }
 
     fn task_on(conn: &Connection, id: &str) -> Result<Option<Task>, String> {
-        conn.query_row(
-            "SELECT id, notion_id, title, completed, progress, remain, date, tags, updated_time, group_id, position,
-                    start_date, end_date, start_time, end_time, reminder_at, reminded_at
-             FROM tasks WHERE id = ?1",
-            params![id],
-            Self::task_from_row,
-        )
-        .optional()
-        .map_err(|e| e.to_string())
+        let mut task = conn
+            .query_row(
+                "SELECT id, notion_id, title, completed, progress, remain, date, tags, updated_time, group_id, position,
+                        start_date, end_date, start_time, end_time, reminder_at, reminded_at, notion_sync_dirty
+                 FROM tasks WHERE id = ?1",
+                params![id],
+                Self::task_from_row,
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        if let Some(ref mut t) = task {
+            let (pending_tasks, pending_pages) = Self::pending_sets_on(conn)?;
+            if pending_tasks.contains(&t.id)
+                || t.notion_id
+                    .as_deref()
+                    .is_some_and(|p| pending_pages.contains(&normalize_notion_id(p)))
+            {
+                t.sync_status = "pending".into();
+            }
+        }
+        Ok(task)
     }
 
     fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         let tags_raw: String = row.get(7)?;
+        let notion_id: Option<String> = row.get(1)?;
+        let start_date: Option<String> = row.get(11)?;
+        let dirty: i64 = row.get(17)?;
+        let sync_status = Self::compute_sync_status(
+            notion_id.as_deref(),
+            start_date.as_deref(),
+            dirty != 0,
+            false,
+        );
         Ok(Task {
             id: row.get(0)?,
-            notion_id: row.get(1)?,
+            notion_id,
             title: row.get(2)?,
             completed: row.get::<_, i64>(3)? != 0,
             progress: row.get(4)?,
@@ -907,12 +1070,13 @@ impl Database {
             updated_time: row.get(8)?,
             group_id: row.get(9)?,
             position: row.get(10)?,
-            start_date: row.get(11)?,
+            start_date,
             end_date: row.get(12)?,
             start_time: row.get(13)?,
             end_time: row.get(14)?,
             reminder_at: row.get(15)?,
             reminded_at: row.get(16)?,
+            sync_status,
         })
     }
 
@@ -933,6 +1097,7 @@ impl Database {
             let mapping = serde_json::to_string(&NotionWriteMapping::from_config(&config))
                 .map_err(|e| e.to_string())?;
             task.completed = !task.completed;
+            task.sync_status = "pending".into();
             tx.execute(
                 "UPDATE tasks SET completed = ?1, updated_time = ?2 WHERE id = ?3",
                 params![task.completed, task.updated_time, id],
@@ -970,26 +1135,39 @@ impl Database {
             if !exists {
                 return Err(crate::language::text("The original group was deleted. The task cannot be restored and remains in Archive.", "原分组已删除，无法取消完成；任务仍保留在 Archive 中").into());
             }
+            let config = Self::notion_config_on(&tx)?;
+            let mark_dirty = task.start_date.is_some() && config.is_configured() && config.sync_local_to_notion;
             tx.execute(
                 "UPDATE tasks SET completed = 0, group_id = ?1, archive_source_group_id = NULL,
-                 updated_time = ?2 WHERE id = ?3",
-                params![source, task.updated_time, id],
+                 updated_time = ?2, notion_sync_dirty = CASE WHEN ?3 != 0 THEN 1 ELSE notion_sync_dirty END
+                 WHERE id = ?4",
+                params![source, task.updated_time, i64::from(mark_dirty), id],
             ).map_err(|e| e.to_string())?;
             task.completed = false;
             task.group_id = source;
+            if mark_dirty {
+                task.sync_status = "pending".into();
+            }
         } else {
             let local: bool = tx.query_row(
                 "SELECT EXISTS(SELECT 1 FROM groups WHERE id = ?1 AND kind = 'local')",
                 params![task.group_id], |row| row.get(0),
             ).map_err(|e| e.to_string())?;
             if !local { return Err(crate::language::text("The task group is missing or does not support archiving.", "任务分组不存在或不支持归档").into()); }
+            let config = Self::notion_config_on(&tx)?;
+            let mark_dirty = task.start_date.is_some() && config.is_configured() && config.sync_local_to_notion;
             tx.execute(
                 "UPDATE tasks SET completed = 1, archive_source_group_id = group_id,
-                 group_id = ?1, updated_time = ?2 WHERE id = ?3",
-                params![ARCHIVE_GROUP_ID, task.updated_time, id],
+                 group_id = ?1, updated_time = ?2,
+                 notion_sync_dirty = CASE WHEN ?3 != 0 THEN 1 ELSE notion_sync_dirty END
+                 WHERE id = ?4",
+                params![ARCHIVE_GROUP_ID, task.updated_time, i64::from(mark_dirty), id],
             ).map_err(|e| e.to_string())?;
             task.completed = true;
             task.group_id = ARCHIVE_GROUP_ID.into();
+            if mark_dirty {
+                task.sync_status = "pending".into();
+            }
         }
         tx.commit().map_err(|e| e.to_string())?;
         Ok(task)
@@ -1115,6 +1293,111 @@ impl Database {
             .map_err(|e| e.to_string())?;
         tx.commit().map_err(|e| e.to_string())?;
         Ok(deleted)
+    }
+
+    pub fn rename_group(&self, id: &str, name: &str) -> Result<(Group, bool), String> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err(crate::language::text("Enter a group name.", "分组名称不能为空").into());
+        }
+        if trimmed.chars().count() > 24 {
+            return Err(crate::language::text(
+                "The group name is too long (24 characters maximum).",
+                "分组名称过长（最多 24 字）",
+            )
+            .into());
+        }
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        let existing: Option<(String, String, String, i64, i64)> = tx
+            .query_row(
+                "SELECT id, name, kind, position, created_at FROM groups WHERE id = ?1",
+                params![id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let Some((gid, old_name, kind, position, created_at)) = existing else {
+            return Err(crate::language::text("The group no longer exists.", "分组不存在").into());
+        };
+        if kind != "local" {
+            return Err(crate::language::text(
+                "Only custom local groups can be renamed.",
+                "仅支持重命名自定义本地分组",
+            )
+            .into());
+        }
+        if old_name == trimmed {
+            return Ok((
+                Group {
+                    id: gid,
+                    name: old_name,
+                    kind,
+                    position,
+                    created_at,
+                },
+                false,
+            ));
+        }
+        let duplicate: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM groups WHERE kind = 'local' AND id != ?1 AND LOWER(TRIM(name)) = LOWER(?2))",
+                params![gid, trimmed],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if duplicate {
+            return Err(crate::language::text(
+                "A group with this name already exists.",
+                "已存在同名分组",
+            )
+            .into());
+        }
+        tx.execute("UPDATE groups SET name = ?1 WHERE id = ?2", params![trimmed, gid])
+            .map_err(|e| e.to_string())?;
+
+        let config = Self::notion_config_on(&tx)?;
+        let now = chrono::Utc::now().timestamp_millis();
+        let marked = if config.is_configured() {
+            if config.sync_local_to_notion {
+                tx.execute(
+                    "UPDATE tasks SET notion_sync_dirty = 1, updated_time = ?2
+                     WHERE (group_id = ?1 OR archive_source_group_id = ?1)
+                       AND (notion_id IS NOT NULL OR start_date IS NOT NULL)",
+                    params![gid, now],
+                )
+                .map_err(|e| e.to_string())?
+            } else {
+                tx.execute(
+                    "UPDATE tasks SET notion_sync_dirty = 1, updated_time = ?2
+                     WHERE (group_id = ?1 OR archive_source_group_id = ?1)
+                       AND notion_id IS NOT NULL",
+                    params![gid, now],
+                )
+                .map_err(|e| e.to_string())?
+            }
+        } else {
+            0
+        };
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok((
+            Group {
+                id: gid,
+                name: trimmed.to_string(),
+                kind,
+                position,
+                created_at,
+            },
+            marked > 0,
+        ))
     }
 
     fn validate_permutation(existing: &[String], ordered: &[String], mismatch_msg: &str) -> Result<(), String> {
@@ -1273,12 +1556,23 @@ impl Database {
             .map_err(|e| e.to_string())?;
         let now = chrono::Utc::now().timestamp_millis();
         let batch = Self::nanos();
+        let config = Self::notion_config_on(&tx)?;
+        let should_sync = schedule.start_date.is_some()
+            && config.is_configured()
+            && config.sync_local_to_notion;
+        let dirty = i64::from(should_sync);
+        let sync_status = Self::compute_sync_status(
+            None,
+            schedule.start_date.as_deref(),
+            should_sync,
+            false,
+        );
         let mut tasks = Vec::with_capacity(titles.len());
         {
             let mut insert = tx.prepare(
                 "INSERT INTO tasks(id, notion_id, title, completed, progress, remain, date, tags, updated_time, group_id, position,
-                                   start_date, end_date, start_time, end_time, reminder_at, reminded_at)
-                 VALUES(?1, NULL, ?2, 0, NULL, NULL, ?3, '[]', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL)",
+                                   start_date, end_date, start_time, end_time, reminder_at, reminded_at, notion_sync_dirty)
+                 VALUES(?1, NULL, ?2, 0, NULL, NULL, ?3, '[]', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL, ?12)",
             ).map_err(|e| e.to_string())?;
             for (index, mut title) in titles.into_iter().enumerate() {
                 // Reuse the title buffers received over IPC instead of copying the batch.
@@ -1300,6 +1594,7 @@ impl Database {
                     schedule.start_time,
                     schedule.end_time,
                     schedule.reminder_at,
+                    dirty,
                 ]).map_err(|e| e.to_string())?;
                 tasks.push(Task {
                     id,
@@ -1319,6 +1614,7 @@ impl Database {
                     updated_time: now,
                     group_id: group.id.clone(),
                     position,
+                    sync_status: sync_status.clone(),
                 });
             }
         }
@@ -1391,15 +1687,12 @@ impl Database {
         })
     }
 
-    /// Update a local task's title and/or schedule/reminder fields.
+    /// Update a task's title, group, and/or schedule/reminder fields.
     pub fn update_local_task(&self, id: &str, update: TaskUpdateInput) -> Result<Task, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
         let existing = Self::task_on(&tx, id)?
             .ok_or_else(|| crate::language::text("The task no longer exists.", "任务不存在").to_string())?;
-        if existing.notion_id.is_some() || existing.group_id == NOTION_GROUP_ID {
-            return Err(crate::language::text("Synced Notion tasks are edited in Notion.", "来自 Notion 的同步任务请在 Notion 中编辑").into());
-        }
         if existing.group_id == ARCHIVE_GROUP_ID {
             return Err(crate::language::text("Restore the archived task before editing it.", "请先取消归档再编辑任务").into());
         }
@@ -1492,12 +1785,31 @@ impl Database {
             existing.position
         };
 
+        let config = Self::notion_config_on(&tx)?;
+        let prev_dirty: i64 = tx
+            .query_row(
+                "SELECT notion_sync_dirty FROM tasks WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        let next_dirty = if start_date.is_none() && existing.notion_id.is_none() {
+            0
+        } else if start_date.is_some()
+            && (existing.notion_id.is_some() || (config.is_configured() && config.sync_local_to_notion))
+        {
+            1
+        } else {
+            prev_dirty
+        };
+
         let now = chrono::Utc::now().timestamp_millis();
         tx.execute(
             "UPDATE tasks
              SET title = ?1, group_id = ?2, position = ?3, date = ?4, start_date = ?5, end_date = ?6,
-                 start_time = ?7, end_time = ?8, reminder_at = ?9, reminded_at = ?10, updated_time = ?11
-             WHERE id = ?12",
+                 start_time = ?7, end_time = ?8, reminder_at = ?9, reminded_at = ?10, updated_time = ?11,
+                 notion_sync_dirty = ?12
+             WHERE id = ?13",
             params![
                 next_title,
                 next_group_id,
@@ -1510,6 +1822,7 @@ impl Database {
                 reminder_at,
                 reminded_at,
                 now,
+                next_dirty,
                 id
             ],
         ).map_err(|e| e.to_string())?;
@@ -1519,11 +1832,86 @@ impl Database {
         Ok(updated)
     }
 
+    pub fn dirty_task_count(&self) -> Result<usize, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let config = Self::notion_config_on(&conn)?;
+        if !config.is_configured() {
+            return Ok(0);
+        }
+        conn.query_row(
+            "SELECT COUNT(*) FROM tasks
+             WHERE notion_sync_dirty != 0
+               AND start_date IS NOT NULL
+               AND (notion_id IS NOT NULL OR ?1 != 0)",
+            params![i64::from(config.sync_local_to_notion)],
+            |row| row.get::<_, usize>(0),
+        )
+        .map_err(|e| e.to_string())
+    }
+
+    pub fn list_dirty_tasks(&self) -> Result<Vec<(Task, Option<String>)>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let config = Self::notion_config_on(&conn)?;
+        if !config.is_configured() {
+            return Ok(Vec::new());
+        }
+        let mut stmt = conn
+            .prepare(
+                "SELECT t.id, t.notion_id, t.title, t.completed, t.progress, t.remain, t.date, t.tags,
+                        t.updated_time, t.group_id, t.position, t.start_date, t.end_date, t.start_time,
+                        t.end_time, t.reminder_at, t.reminded_at, t.notion_sync_dirty,
+                        CASE WHEN g.kind = 'local' THEN g.name ELSE NULL END AS group_tag_name
+                 FROM tasks t
+                 LEFT JOIN groups g
+                   ON g.id = COALESCE(NULLIF(t.archive_source_group_id, ''), t.group_id)
+                 WHERE t.notion_sync_dirty != 0
+                   AND t.start_date IS NOT NULL
+                   AND (t.notion_id IS NOT NULL OR ?1 != 0)
+                 ORDER BY t.updated_time ASC, t.rowid ASC",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![i64::from(config.sync_local_to_notion)], |row| {
+                Ok((Self::task_from_row(row)?, row.get::<_, Option<String>>(18)?))
+            })
+            .map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| e.to_string())?);
+        }
+        Ok(out)
+    }
+
+    pub fn mark_task_synced(
+        &self,
+        task_id: &str,
+        notion_id: &str,
+        expected_updated_time: i64,
+    ) -> Result<bool, String> {
+        let normalized = normalize_notion_id(notion_id);
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        tx.execute(
+            "UPDATE tasks SET notion_id = COALESCE(NULLIF(notion_id, ''), ?1) WHERE id = ?2",
+            params![normalized, task_id],
+        )
+        .map_err(|e| e.to_string())?;
+        let cleared = tx
+            .execute(
+                "UPDATE tasks SET notion_sync_dirty = 0 WHERE id = ?1 AND updated_time = ?2",
+                params![task_id, expected_updated_time],
+            )
+            .map_err(|e| e.to_string())?
+            != 0;
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(cleared)
+    }
+
     pub fn due_reminders(&self, now_ms: i64) -> Result<Vec<Task>, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         let mut stmt = conn.prepare(
             "SELECT id, notion_id, title, completed, progress, remain, date, tags, updated_time, group_id, position,
-                    start_date, end_date, start_time, end_time, reminder_at, reminded_at
+                    start_date, end_date, start_time, end_time, reminder_at, reminded_at, notion_sync_dirty
              FROM tasks
              WHERE completed = 0
                AND group_id != ?1
@@ -1739,6 +2127,7 @@ mod tests {
             updated_time: 1,
             group_id: NOTION_GROUP_ID.into(),
             position: 0,
+            sync_status: "synced".into(),
         }
     }
 
@@ -1940,6 +2329,7 @@ mod tests {
             updated_time: 1,
             group_id: NOTION_GROUP_ID.into(),
             position: 0,
+            sync_status: "synced".into(),
         };
         merge(&db, &[remote]);
 
@@ -2410,7 +2800,7 @@ mod tests {
         assert_eq!(db.toggle_task("legitimate-done").unwrap().group_id, "user-group");
         assert_eq!(db.get_task("remote").unwrap().unwrap().group_id, NOTION_GROUP_ID);
         let conn = db.conn.lock().unwrap();
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0)).unwrap(), 3);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0)).unwrap(), 4);
         assert_eq!(conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE name = 'sync_log'", [],
             |row| row.get::<_, i64>(0)).unwrap(), 0);
     }
@@ -2874,7 +3264,7 @@ mod tests {
 
         assert_eq!(
             db.conn.lock().unwrap().query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0)).unwrap(),
-            3
+            4
         );
         let view = db.task_view().unwrap();
         let group_ids: Vec<_> = view.groups.iter().map(|g| g.id.as_str()).collect();
@@ -2895,8 +3285,8 @@ mod tests {
         let reordered_group_ids: Vec<_> = reordered_groups.iter().map(|g| g.id.as_str()).collect();
         assert_eq!(reordered_group_ids, vec![NOTION_GROUP_ID, "g2", "g1", ARCHIVE_GROUP_ID]);
 
-        // Newer schema versions (e.g. v4) must be rejected cleanly.
-        db.conn.lock().unwrap().execute_batch("PRAGMA user_version = 4;").unwrap();
+        // Newer schema versions (e.g. v5) must be rejected cleanly.
+        db.conn.lock().unwrap().execute_batch("PRAGMA user_version = 5;").unwrap();
         assert!(db.migrate().is_err());
     }
 
@@ -2952,7 +3342,7 @@ mod tests {
 
         assert_eq!(
             db.conn.lock().unwrap().query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0)).unwrap(),
-            3
+            4
         );
         let single = db.get_task("single").unwrap().unwrap();
         assert_eq!(single.start_date.as_deref(), Some("2026-11-24"));
@@ -3064,5 +3454,59 @@ mod tests {
             db.load_app_icon().unwrap(),
             ("l3a".to_string(), Some("data:image/png;base64,AAA".to_string()))
         );
+    }
+
+    #[test]
+    fn tags2_auto_maps_groups_rename_marks_dirty_and_bulk_sync_toggle_skips_unscheduled() {
+        let db = test_db();
+        let unscheduled_group = db.create_group("Research").unwrap();
+        let unscheduled = db.import_local_tasks_with_schedule(
+            vec!["No date yet".into()],
+            Some(&unscheduled_group.id),
+            None,
+            None,
+        ).unwrap().tasks.remove(0);
+        let scheduled = db.import_local_tasks_with_schedule(
+            vec!["Existing dated".into()],
+            Some(&unscheduled_group.id),
+            None,
+            Some(TaskScheduleInput {
+                start_date: Some("2026-11-28".into()),
+                end_date: None,
+                start_time: None,
+                end_time: None,
+                reminder_at: None,
+            }),
+        ).unwrap().tasks.remove(0);
+        assert_eq!(unscheduled.sync_status, "unscheduled");
+        assert_eq!(scheduled.sync_status, "local");
+
+        // Configuring Notion with sync_local_to_notion=true marks existing scheduled tasks dirty immediately.
+        let cfg = configure(&db);
+        assert!(cfg.sync_local_to_notion);
+        assert_eq!(db.dirty_task_count().unwrap(), 1);
+        assert_eq!(db.get_task(&scheduled.id).unwrap().unwrap().sync_status, "pending");
+        assert_eq!(db.get_task(&unscheduled.id).unwrap().unwrap().sync_status, "unscheduled");
+
+        // Pulling a remote page with Tags 2 = "Learning" auto-creates local group "Learning".
+        let version = db.notion_context().unwrap().1;
+        let mut pulled = remote_task("33333333-3333-3333-3333-333333333333");
+        pulled.start_date = Some("2026-10-01".into());
+        pulled.date = Some("2026-10-01".into());
+        pulled.completed = true;
+        assert!(db.merge_notion_snapshot_with_groups(&[(pulled.clone(), Some("Learning".into()))], version).unwrap());
+
+        let groups = db.list_groups().unwrap();
+        let learning = groups.iter().find(|g| g.kind == "local" && g.name == "Learning").unwrap();
+        let saved_pulled = db.get_task(&pulled.id).unwrap().unwrap();
+        assert_eq!(saved_pulled.group_id, learning.id);
+        assert!(saved_pulled.completed);
+        assert_eq!(saved_pulled.sync_status, "synced");
+
+        // Renaming "Learning" -> "Study" marks synced task dirty so Tags 2 pushes to Notion.
+        let (renamed, has_dirty) = db.rename_group(&learning.id, "Study").unwrap();
+        assert_eq!(renamed.name, "Study");
+        assert!(has_dirty);
+        assert_eq!(db.get_task(&pulled.id).unwrap().unwrap().sync_status, "pending");
     }
 }

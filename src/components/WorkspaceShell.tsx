@@ -32,6 +32,7 @@ export function WorkspaceShell({ onOpenSettings }: Props) {
   const operationError = useTaskStore((s) => s.operationError);
   const dismissOperationError = useTaskStore((s) => s.dismissOperationError);
   const pendingGroups = useTaskStore((s) => s.pendingGroups);
+  const renameGroup = useTaskStore((s) => s.renameGroup);
   const forceSync = useTaskStore((s) => s.forceSync);
 
   const maximized = useModeStore((s) => s.maximized);
@@ -54,6 +55,8 @@ export function WorkspaceShell({ onOpenSettings }: Props) {
   const [calendarFocusDayIso, setCalendarFocusDayIso] = useState<string | null>(null);
   const [inspectedTaskId, setInspectedTaskId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null);
+  const [renameGroupDraft, setRenameGroupDraft] = useState("");
   const [windowError, setWindowError] = useState<string | null>(null);
   const fallbackFocus = useRef<HTMLButtonElement>(null);
 
@@ -98,8 +101,24 @@ export function WorkspaceShell({ onOpenSettings }: Props) {
         ? l.t("归档")
         : selectedGroup.name;
 
-  const statusClass = status === "syncing" ? "syncing" : status === "error" ? "error" : "";
+  const isSynced = status === "ok" && syncState.pendingCount === 0;
+  const progressDone = syncState.progressCompleted ?? 0;
+  const progressTotal = syncState.progressTotal ?? 0;
+  const progressPercent = progressTotal > 0 ? Math.min(100, Math.round((progressDone / progressTotal) * 100)) : 0;
+  const statusClass = status === "syncing" ? "syncing" : status === "error" ? "error" : isSynced ? "ok" : "";
   const isTauri = "__TAURI_INTERNALS__" in window;
+
+  const commitRenameGroup = async (groupId: string, originalName: string) => {
+    const trimmed = renameGroupDraft.trim();
+    setRenamingGroupId(null);
+    if (!trimmed || trimmed === originalName) return;
+    try {
+      await renameGroup(groupId, trimmed);
+      pushToast(l.t("分组已重命名为「{name}」", { name: trimmed }));
+    } catch (err) {
+      pushToast(l.errorText(err), "error");
+    }
+  };
 
   const handleHide = async () => {
     setWindowError(null);
@@ -164,21 +183,41 @@ export function WorkspaceShell({ onOpenSettings }: Props) {
         <div className="workspace-titlebar-right">
           <button
             type="button"
-            className="workspace-sync-pill"
+            className={`workspace-sync-pill${status === "syncing" ? " is-syncing" : ""}${isSynced ? " is-synced" : ""}`}
             title={l.t("同步")}
             disabled={status === "syncing" || syncRequestPending}
             onClick={() => void forceSync()}
           >
-            <span className={`status-dot ${statusClass}`} />
-            <span>
+            {isSynced ? (
+              <svg className="sync-check-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M5 12.5 9.5 17 19 7.5" />
+              </svg>
+            ) : (
+              <span className={`status-dot ${statusClass}`} />
+            )}
+            <span className="workspace-sync-text">
               {status === "unconfigured"
                 ? l.t("Notion 未配置")
                 : status === "syncing"
-                  ? l.t("同步中…")
+                  ? progressTotal > 0
+                    ? `${progressDone}/${progressTotal}`
+                    : progressDone > 0
+                      ? l.t("已拉取 {count} 条…", { count: progressDone })
+                      : l.t("同步中…")
                   : status === "error"
                     ? l.t("同步失败")
-                    : l.t("已同步")}
+                    : syncState.pendingCount > 0
+                      ? l.t("待同步 {count}", { count: syncState.pendingCount })
+                      : l.t("已同步")}
             </span>
+            {status === "syncing" && (
+              <span className="workspace-sync-progress" aria-hidden="true">
+                <span
+                  className={`workspace-sync-progress-fill${progressTotal === 0 ? " is-indeterminate" : ""}`}
+                  style={progressTotal > 0 ? { width: `${progressPercent}%` } : undefined}
+                />
+              </span>
+            )}
           </button>
 
           <button
@@ -328,24 +367,68 @@ export function WorkspaceShell({ onOpenSettings }: Props) {
                     : group.kind === "archive"
                       ? l.t("归档")
                       : group.name;
+                if (group.kind === "local" && renamingGroupId === group.id) {
+                  return (
+                    <div key={group.id} className="workspace-nav-rename-row">
+                      <input
+                        type="text"
+                        className="workspace-nav-rename-input"
+                        aria-label={l.t("重命名分组")}
+                        autoFocus
+                        maxLength={24}
+                        value={renameGroupDraft}
+                        onChange={(e) => setRenameGroupDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+                            e.preventDefault();
+                            void commitRenameGroup(group.id, group.name);
+                          } else if (e.key === "Escape") {
+                            e.preventDefault();
+                            setRenamingGroupId(null);
+                          }
+                        }}
+                        onBlur={() => void commitRenameGroup(group.id, group.name)}
+                      />
+                    </div>
+                  );
+                }
                 return (
-                  <button
+                  <div
                     key={group.id}
-                    type="button"
-                    className={`workspace-nav-item${!isHomePage && selectedGroupId === group.id ? " active" : ""}`}
-                    onClick={() => {
-                      setIsHomePage(false);
-                      setSelectedGroupId(group.id);
-                    }}
+                    className={`workspace-nav-row${!isHomePage && selectedGroupId === group.id ? " active" : ""}`}
                   >
-                    <span className={`group-badge group-badge-${group.kind}`} aria-hidden>
-                      {group.kind === "notion" ? "N" : group.kind === "archive" ? "A" : "L"}
-                    </span>
-                    <span className="workspace-nav-label">{label}</span>
-                    <span className="workspace-nav-count">
-                      {l.number(countsByGroup.get(group.id) ?? 0)}
-                    </span>
-                  </button>
+                    <button
+                      type="button"
+                      className={`workspace-nav-item${!isHomePage && selectedGroupId === group.id ? " active" : ""}`}
+                      onClick={() => {
+                        setIsHomePage(false);
+                        setSelectedGroupId(group.id);
+                      }}
+                    >
+                      <span className={`group-badge group-badge-${group.kind}`} aria-hidden>
+                        {group.kind === "notion" ? "N" : group.kind === "archive" ? "A" : "L"}
+                      </span>
+                      <span className="workspace-nav-label">{label}</span>
+                      <span className="workspace-nav-count">
+                        {l.number(countsByGroup.get(group.id) ?? 0)}
+                      </span>
+                    </button>
+                    {group.kind === "local" && (
+                      <button
+                        type="button"
+                        className="workspace-nav-rename-btn"
+                        aria-label={`${l.t("重命名分组")} ${group.name}`}
+                        title={l.t("重命名分组")}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setRenamingGroupId(group.id);
+                          setRenameGroupDraft(group.name);
+                        }}
+                      >
+                        ✎
+                      </button>
+                    )}
+                  </div>
                 );
               })}
 

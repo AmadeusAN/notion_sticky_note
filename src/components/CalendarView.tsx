@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useLocale } from "../stores/languageStore";
 import { useModeStore } from "../stores/modeStore";
-import { ARCHIVE_GROUP_ID, NOTION_GROUP_ID, type Task, type TaskScheduleInput, type TaskUpdateInput } from "../types";
+import { ARCHIVE_GROUP_ID, type Task, type TaskScheduleInput, type TaskUpdateInput } from "../types";
 import { todayIso } from "../services/taskDate";
 import {
   computeCellFocusScore,
@@ -61,7 +61,7 @@ interface MoveDragState {
 }
 
 function isEditableLocalTask(task: Task): boolean {
-  return !task.notionId && task.groupId !== NOTION_GROUP_ID && task.groupId !== ARCHIVE_GROUP_ID;
+  return task.groupId !== ARCHIVE_GROUP_ID;
 }
 
 function computeTimedTargetTimes(
@@ -1165,6 +1165,19 @@ export function CalendarView({
                                         <span className="cal-pill-time">{span.startTime}</span>
                                       )}
                                       <span className="cal-pill-title">{task.title}</span>
+                                      {(task.syncStatus === "synced" || task.syncStatus === "pending") && (
+                                        <span
+                                          className={`cal-sync-dot is-${task.syncStatus}`}
+                                          aria-hidden="true"
+                                          title={
+                                            task.syncStatus === "synced"
+                                              ? l.t("已同步到 Notion")
+                                              : l.t("等待同步到 Notion")
+                                          }
+                                        >
+                                          {task.syncStatus === "synced" ? "✓" : "↻"}
+                                        </span>
+                                      )}
                                       {editable && renderSpanResizeHandle(span)}
                                     </div>
                                   );
@@ -1218,6 +1231,19 @@ export function CalendarView({
                                   }}
                                 />
                                 <span className="cal-pill-title">{task.title}</span>
+                                {(task.syncStatus === "synced" || task.syncStatus === "pending") && (
+                                  <span
+                                    className={`cal-sync-dot is-${task.syncStatus}`}
+                                    aria-hidden="true"
+                                    title={
+                                      task.syncStatus === "synced"
+                                        ? l.t("已同步到 Notion")
+                                        : l.t("等待同步到 Notion")
+                                    }
+                                  >
+                                    {task.syncStatus === "synced" ? "✓" : "↻"}
+                                  </span>
+                                )}
                                 {isResizingSpan && (
                                   <span className="cal-span-resize-badge">{spanDays}d</span>
                                 )}

@@ -105,6 +105,15 @@ async fn create_group(name: String, state: State<'_, AppState>) -> Result<Group,
 }
 
 #[tauri::command]
+async fn rename_group(id: String, name: String, state: State<'_, AppState>) -> Result<Group, String> {
+    let (group, should_wake) = database_work(state.db.clone(), move |db| db.rename_group(&id, &name)).await?;
+    if should_wake {
+        state.sync.wake_pending();
+    }
+    Ok(group)
+}
+
+#[tauri::command]
 async fn delete_group(id: String, state: State<'_, AppState>) -> Result<Vec<String>, String> {
     database_work(state.db.clone(), move |db| db.delete_group(&id)).await
 }
@@ -128,12 +137,15 @@ async fn import_tasks(
     schedule: Option<TaskScheduleInput>,
     state: State<'_, AppState>,
 ) -> Result<TaskImportResult, String> {
-    let should_wake = schedule.as_ref().is_some_and(|s| s.reminder_at.is_some());
+    let should_wake_reminder = schedule.as_ref().is_some_and(|s| s.reminder_at.is_some());
     let result = database_work(state.db.clone(), move |db| {
         db.import_local_tasks_with_schedule(titles, group_id.as_deref(), new_group_name.as_deref(), schedule)
     }).await?;
-    if should_wake {
+    if should_wake_reminder {
         state.reminder.wake();
+    }
+    if result.tasks.iter().any(|t| t.sync_status == "pending") {
+        state.sync.wake_pending();
     }
     Ok(result)
 }
@@ -146,6 +158,9 @@ async fn update_task(
 ) -> Result<Task, String> {
     let task = database_work(state.db.clone(), move |db| db.update_local_task(&id, update)).await?;
     state.reminder.wake();
+    if task.sync_status == "pending" {
+        state.sync.wake_pending();
+    }
     Ok(task)
 }
 
@@ -162,7 +177,9 @@ async fn clear_archive(state: State<'_, AppState>) -> Result<Vec<String>, String
 #[tauri::command]
 async fn toggle_task(id: String, state: State<'_, AppState>) -> Result<Task, String> {
     let task = database_work(state.db.clone(), move |db| db.toggle_task(&id)).await?;
-    if task.notion_id.is_some() { state.sync.wake_pending(); }
+    if task.notion_id.is_some() || task.sync_status == "pending" {
+        state.sync.wake_pending();
+    }
     Ok(task)
 }
 
@@ -862,6 +879,7 @@ pub fn run() {
             hide_main,
             get_task_view,
             create_group,
+            rename_group,
             delete_group,
             reorder_groups,
             reorder_tasks,

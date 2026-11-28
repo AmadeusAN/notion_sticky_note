@@ -4,7 +4,7 @@ import { ARCHIVE_GROUP_ID, NOTION_GROUP_ID } from "../types";
 import {
   apiClearArchive, apiCreateGroup, apiDeleteGroup, apiDeleteTask, apiForceSync,
   apiGetSyncState, apiGetTaskView, apiImportTasks, apiListenSyncState,
-  apiReorderGroups, apiReorderTasks, apiToggleTask, apiUpdateTask,
+  apiRenameGroup, apiReorderGroups, apiReorderTasks, apiToggleTask, apiUpdateTask,
 } from "../services/tauriApi";
 import { buildDateSummary } from "../services/taskDate";
 
@@ -32,6 +32,7 @@ interface TaskState {
   connectSyncState: () => () => void;
   dismissOperationError: () => void;
   createGroup: (name: string) => Promise<Group>;
+  renameGroup: (id: string, name: string) => Promise<Group>;
   deleteGroup: (id: string) => Promise<void>;
   reorderGroups: (orderedIds: string[]) => Promise<void>;
   reorderTasks: (groupId: string, orderedIds: string[]) => Promise<void>;
@@ -51,6 +52,7 @@ interface TaskState {
 const initialSyncState: SyncState = {
   seq: 0, cycleId: 0, status: "unconfigured", lastSuccessfulAt: null,
   pendingCount: 0, unresolvedCount: 0, error: null, dataChanged: false,
+  phase: "idle", progressCompleted: 0, progressTotal: 0, progressMessage: null,
 };
 
 function errMsg(error: unknown): string {
@@ -69,6 +71,7 @@ function sameTask(a: Task, b: Task): boolean {
     (a.remindedAt ?? null) === (b.remindedAt ?? null) &&
     a.updatedTime === b.updatedTime && a.groupId === b.groupId &&
     (a.position ?? 0) === (b.position ?? 0) &&
+    (a.syncStatus ?? "local") === (b.syncStatus ?? "local") &&
     a.tags.length === b.tags.length && a.tags.every((tag, index) => tag === b.tags[index]);
 }
 
@@ -238,6 +241,24 @@ export function createTaskStore() {
           return group;
         } catch (error) { report(key, error, () => get().createGroup(name)); throw error; }
         finally { set({ creatingGroup: false }); end([]); }
+      },
+
+      renameGroup: async (id, name) => {
+        writable(id);
+        const key = `rename-group:${id}`;
+        begin(key, [id]);
+        try {
+          const updated = await apiRenameGroup(id, name.trim());
+          set((state) => ({
+            groups: state.groups.map((g) => (g.id === id ? updated : g)),
+          }));
+          return updated;
+        } catch (error) {
+          report(key, error, () => get().renameGroup(id, name));
+          throw error;
+        } finally {
+          end([id]);
+        }
       },
 
       importTasks: async (titles, groupId, newGroupName, schedule) => {

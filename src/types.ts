@@ -9,6 +9,8 @@ export type { FxThemeId } from "./fx/themes";
 export type { DockHandleId } from "./dockHandles";
 export type { AppIconPresetId, AppIconId, AppIconState } from "./services/appIcons";
 
+export type TaskSyncStatus = "synced" | "pending" | "unscheduled" | "local";
+
 export interface Task {
   id: string;
   notionId: string | null;
@@ -28,6 +30,7 @@ export interface Task {
   /** Owning group id; synced Notion rows live in NOTION_GROUP_ID. */
   groupId: string;
   position?: number;
+  syncStatus?: TaskSyncStatus;
 }
 
 export interface TaskScheduleInput {
@@ -105,6 +108,10 @@ export interface NotionConfig {
   statusProperty: string;
   statusDoneValue: string;
   statusTodoValue: string;
+  syncLocalToNotion: boolean;
+  groupProperty: string;
+  defaultTagProperty: string;
+  defaultTagValue: string;
 }
 
 export type SaveNotionConfigResult =
@@ -177,6 +184,10 @@ export interface SyncState {
   unresolvedCount: number;
   error: { category: string; message: string; status: number | null; code: string | null; retryAfterMs: number | null } | null;
   dataChanged: boolean;
+  phase?: string;
+  progressCompleted?: number;
+  progressTotal?: number;
+  progressMessage?: string | null;
 }
 
 export const MOCK_TASKS: Task[] = [

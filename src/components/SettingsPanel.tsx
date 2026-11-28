@@ -911,9 +911,52 @@ export function SettingsPanel({ onClose }: Props) {
                       }
                     />
                   </div>
+                  <div className="field">
+                    <label htmlFor="notion-group-prop">{l.t("任务组属性名（Tags 2）")}</label>
+                    <input
+                      id="notion-group-prop"
+                      type="text"
+                      value={notion.groupProperty}
+                      onChange={(e) =>
+                        updateNotionDraft({ groupProperty: e.target.value })
+                      }
+                    />
+                  </div>
+                  <div className="field">
+                    <label htmlFor="notion-default-tag-prop">{l.t("默认事件标签属性")}</label>
+                    <input
+                      id="notion-default-tag-prop"
+                      type="text"
+                      value={notion.defaultTagProperty}
+                      onChange={(e) =>
+                        updateNotionDraft({ defaultTagProperty: e.target.value })
+                      }
+                    />
+                  </div>
+                  <div className="field" style={{ gridColumn: "1 / -1" }}>
+                    <label htmlFor="notion-default-tag-val">{l.t("新增任务默认事件标签值")}</label>
+                    <input
+                      id="notion-default-tag-val"
+                      type="text"
+                      value={notion.defaultTagValue}
+                      onChange={(e) =>
+                        updateNotionDraft({ defaultTagValue: e.target.value })
+                      }
+                    />
+                  </div>
                 </div>
-                <p className="hint" style={{ marginTop: 10 }}>
-                  {l.t("同步拉取：日期覆盖今天的任务。勾选时会写 checkbox（默认 done?），并连带更新 Status（默认 Done / Not started），对齐 Notion Button 自动化。")}</p>
+                <label className="check-row notion-sync-toggle" style={{ marginTop: 12 }}>
+                  <input
+                    type="checkbox"
+                    checked={notion.syncLocalToNotion}
+                    onChange={(e) =>
+                      updateNotionDraft({ syncLocalToNotion: e.target.checked })
+                    }
+                  />
+                  <span>{l.t("将本地已排期任务自动双向同步到 Notion（开启后立即同步已有排期任务）")}</span>
+                </label>
+                <p className="hint" style={{ marginTop: 8 }}>
+                  {l.t("按需触发全量同步：拉取含历史已完成在内的全部日期任务；本地新建排期任务默认写入 Tags（event）与 Tags 2（分组）。未排期任务保持仅本地可见。")}</p>
               </fieldset>
 
               {message ? <div className="msg" role="status">{l.errorText(message)}</div> : null}

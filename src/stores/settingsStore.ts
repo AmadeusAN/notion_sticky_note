@@ -58,6 +58,8 @@ const defaultNotion: NotionConfig = {
   token: "", databaseId: "", doneProperty: "done?", titleProperty: "Name",
   dateProperty: "Date", statusProperty: "Status",
   statusDoneValue: "Done", statusTodoValue: "Not started",
+  syncLocalToNotion: true, groupProperty: "Tags 2",
+  defaultTagProperty: "Tags", defaultTagValue: "event",
 };
 
 function applyFontCss(font: FontId) {

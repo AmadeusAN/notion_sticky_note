@@ -17,8 +17,9 @@ export function TaskInspector({ task, groups, onSave, onToggle, onDelete, onClos
   const l = useLocale();
   const isNotion = Boolean(task.notionId || task.groupId === NOTION_GROUP_ID);
   const isArchive = task.groupId === ARCHIVE_GROUP_ID;
-  const readonly = isNotion || isArchive;
+  const readonly = isArchive;
   const localGroups = groups.filter((g) => g.kind === "local");
+  const syncStatus = task.syncStatus ?? (task.notionId ? "synced" : task.startDate ? "local" : "unscheduled");
 
   const [title, setTitle] = useState(task.title);
   const [groupId, setGroupId] = useState(task.groupId);
@@ -116,12 +117,24 @@ export function TaskInspector({ task, groups, onSave, onToggle, onDelete, onClos
       </div>
 
       <div className="inspector-body">
+        <div className="inspector-sync-banner" data-sync={syncStatus}>
+          <span className={`task-sync-badge is-${syncStatus}`} aria-hidden="true">
+            {syncStatus === "synced" ? "✓" : syncStatus === "pending" ? "↻" : "○"}
+          </span>
+          <span>
+            {syncStatus === "synced"
+              ? l.t("已同步到 Notion")
+              : syncStatus === "pending"
+                ? l.t("等待同步到 Notion")
+                : syncStatus === "unscheduled"
+                  ? l.t("未设置日期，仅保存在本地（拖入日历后开启同步）")
+                  : l.t("仅本地保存")}
+          </span>
+        </div>
         {readonly ? (
           <>
             <p className="inspector-readonly-banner" role="status">
-              {isNotion
-                ? l.t("来自 Notion 的同步任务请在 Notion 中编辑")
-                : l.t("请先取消归档再编辑任务")}
+              {l.t("请先取消归档再编辑任务")}
             </p>
             <h3 className="inspector-readonly-title">{task.title}</h3>
             {(scheduleSummary || reminderSummary || task.progress || task.remain || task.tags.length > 0) && (

@@ -5,7 +5,7 @@ import type { Task } from "../types";
 import { useTaskStore } from "../stores/taskStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useToastStore } from "../stores/toastStore";
-import { isNotionConfigured, NOTION_GROUP_ID } from "../types";
+import { ARCHIVE_GROUP_ID, isNotionConfigured, NOTION_GROUP_ID } from "../types";
 import type { SortableItemProps } from "./useSortableList";
 
 interface Props {
@@ -27,7 +27,8 @@ export const TaskItem = memo(function TaskItem({ task, onDelete, onEdit, canDrag
   const archiveBusy = useTaskStore((s) => s.clearingArchive && !task.notionId);
   const busy = Boolean(pending) || groupDeleting || archiveBusy;
   const canDelete = Boolean(onDelete) && !task.notionId && task.groupId !== NOTION_GROUP_ID;
-  const canEdit = Boolean(onEdit) && !task.notionId && task.groupId !== NOTION_GROUP_ID && !task.completed;
+  const canEdit = Boolean(onEdit) && !needsConfiguration && task.groupId !== ARCHIVE_GROUP_ID && !task.completed;
+  const syncStatus = task.syncStatus ?? (task.notionId ? "synced" : task.startDate ? "local" : "unscheduled");
   const scheduleLabel = formatScheduleBadge(task, l.locale);
   const reminderLabel = task.reminderAt ? formatReminderBadge(task.reminderAt, l.locale) : null;
 
@@ -75,7 +76,32 @@ export const TaskItem = memo(function TaskItem({ task, onDelete, onEdit, canDrag
         {pending && <span className="task-pending-mark" aria-hidden>…</span>}
       </button>
       <div className="task-body">
-        <p className="task-text">{task.title}</p>
+        <div className="task-title-line">
+          <p className="task-text">{task.title}</p>
+          <span
+            className={`task-sync-badge is-${syncStatus}`}
+            title={
+              syncStatus === "synced"
+                ? l.t("已同步到 Notion")
+                : syncStatus === "pending"
+                  ? l.t("等待同步到 Notion")
+                  : syncStatus === "unscheduled"
+                    ? l.t("未排期（暂不同步）")
+                    : l.t("仅本地保存")
+            }
+            aria-label={
+              syncStatus === "synced"
+                ? l.t("已同步到 Notion")
+                : syncStatus === "pending"
+                  ? l.t("等待同步到 Notion")
+                  : syncStatus === "unscheduled"
+                    ? l.t("未排期（暂不同步）")
+                    : l.t("仅本地保存")
+            }
+          >
+            {syncStatus === "synced" ? "✓" : syncStatus === "pending" ? "↻" : "○"}
+          </span>
+        </div>
         {(task.progress || task.remain || scheduleLabel || reminderLabel || task.tags.length > 0) && (
           <div className="task-meta">
             {task.progress ? (

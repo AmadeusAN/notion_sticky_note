@@ -29,6 +29,12 @@ pub struct Task {
     pub group_id: String,
     #[serde(default)]
     pub position: i64,
+    #[serde(default = "default_sync_status")]
+    pub sync_status: String,
+}
+
+fn default_sync_status() -> String {
+    "local".into()
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -128,6 +134,14 @@ pub struct NotionConfig {
     pub status_done_value: String,
     #[serde(default = "default_status_todo_value")]
     pub status_todo_value: String,
+    #[serde(default = "default_sync_local_to_notion")]
+    pub sync_local_to_notion: bool,
+    #[serde(default = "default_group_property")]
+    pub group_property: String,
+    #[serde(default = "default_tag_property")]
+    pub default_tag_property: String,
+    #[serde(default = "default_tag_value")]
+    pub default_tag_value: String,
 }
 
 impl NotionConfig {
@@ -218,6 +232,22 @@ fn default_status_todo_value() -> String {
     "Not started".into()
 }
 
+fn default_sync_local_to_notion() -> bool {
+    true
+}
+
+fn default_group_property() -> String {
+    "Tags 2".into()
+}
+
+fn default_tag_property() -> String {
+    "Tags".into()
+}
+
+fn default_tag_value() -> String {
+    "event".into()
+}
+
 impl Default for NotionConfig {
     fn default() -> Self {
         Self {
@@ -229,6 +259,10 @@ impl Default for NotionConfig {
             status_property: default_status_property(),
             status_done_value: default_status_done_value(),
             status_todo_value: default_status_todo_value(),
+            sync_local_to_notion: default_sync_local_to_notion(),
+            group_property: default_group_property(),
+            default_tag_property: default_tag_property(),
+            default_tag_value: default_tag_value(),
         }
     }
 }
@@ -456,6 +490,7 @@ pub fn mock_tasks() -> Vec<Task> {
             updated_time: now,
             group_id: NOTION_GROUP_ID.into(),
             position: 0,
+            sync_status: "local".into(),
         },
         Task {
             id: "local-2".into(),
@@ -475,6 +510,7 @@ pub fn mock_tasks() -> Vec<Task> {
             updated_time: now,
             group_id: NOTION_GROUP_ID.into(),
             position: 0,
+            sync_status: "local".into(),
         },
         Task {
             id: "local-3".into(),
@@ -494,6 +530,7 @@ pub fn mock_tasks() -> Vec<Task> {
             updated_time: now,
             group_id: NOTION_GROUP_ID.into(),
             position: 0,
+            sync_status: "unscheduled".into(),
         },
     ]
 }

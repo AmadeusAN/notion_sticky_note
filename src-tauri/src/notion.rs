@@ -76,12 +76,6 @@ async fn response_error(response: reqwest::Response) -> (NotionError, Option<Str
 }
 
 const NOTION_VERSION: &str = "2022-06-28";
-/// How far back (by start date) to look for unfinished multi-day tasks.
-/// Notion cannot filter by range end, so we bound start-date lookback instead of
-/// pulling every historical row with start ≤ today.
-const DATE_LOOKBACK_DAYS: i64 = 60;
-/// How far ahead to pull scheduled Notion tasks so calendar views show upcoming work.
-const DATE_LOOKAHEAD_DAYS: i64 = 60;
 
 #[derive(Clone)]
 pub struct NotionClient {
@@ -103,8 +97,8 @@ impl NotionClient {
 
     fn http_builder() -> reqwest::ClientBuilder {
         reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(5))
-            .timeout(Duration::from_secs(20))
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(45))
     }
 
     fn base_url(&self) -> &str {
@@ -156,58 +150,170 @@ impl NotionClient {
         if !response.status().is_success() {
             return Err(response_error(response).await.0);
         }
-        let page: Value = response.json().await.map_err(|_| protocol_error())?;
+        let page: Value = response
+            .json()
+            .await
+            .map_err(|err| if err.is_decode() { protocol_error() } else { NotionError::transport(err) })?;
         page.get("parent").and_then(|parent| parent.get("database_id")).and_then(Value::as_str)
             .filter(|id| !id.trim().is_empty()).map(str::to_owned).ok_or_else(protocol_error)
     }
 
     pub async fn query_tasks(&self, config: &NotionConfig) -> Result<Vec<Task>, NotionError> {
+        let items = self.query_tasks_with_progress(config, |_| {}).await?;
+        Ok(items.into_iter().map(|(task, _)| task).collect())
+    }
+
+    pub async fn query_tasks_with_progress<F>(
+        &self,
+        config: &NotionConfig,
+        on_progress: F,
+    ) -> Result<Vec<(Task, Option<String>)>, NotionError>
+    where
+        F: Fn(usize),
+    {
         Self::require_config(config)?;
-        let today = chrono::Local::now().date_naive();
-        let today_str = today.format("%Y-%m-%d").to_string();
-        let tomorrow_str = (today + chrono::Duration::days(1)).format("%Y-%m-%d").to_string();
-        let lookback_str = (today - chrono::Duration::days(DATE_LOOKBACK_DAYS)).format("%Y-%m-%d").to_string();
-        let lookahead_str = (today + chrono::Duration::days(DATE_LOOKAHEAD_DAYS)).format("%Y-%m-%d").to_string();
-        let date_prop = if config.date_property.trim().is_empty() { "Date" } else { config.date_property.trim() };
-        let done_prop = if config.done_property.trim().is_empty() { "done?" } else { config.done_property.trim() };
+        let date_prop = if config.date_property.trim().is_empty() {
+            "Date"
+        } else {
+            config.date_property.trim()
+        };
         let url = format!("{}/databases/{}/query", self.base_url(), config.database_id.trim());
-        let filter = json!({"or": [
-            {"property": date_prop, "date": {"equals": today_str}},
-            {"and": [
-                {"property": done_prop, "checkbox": {"equals": false}},
-                {"property": date_prop, "date": {"on_or_before": today_str}},
-                {"property": date_prop, "date": {"on_or_after": lookback_str}}
-            ]},
-            {"and": [
-                {"property": date_prop, "date": {"on_or_after": tomorrow_str}},
-                {"property": date_prop, "date": {"on_or_before": lookahead_str}}
-            ]}
-        ]});
+        let filter = json!({"property": date_prop, "date": {"is_not_empty": true}});
         let mut results = Vec::new();
         let mut cursor: Option<String> = None;
         let mut cursors = HashSet::new();
         loop {
-            let mut body = json!({"page_size": 100, "filter": filter});
-            if let Some(cursor) = &cursor { body["start_cursor"] = json!(cursor); }
-            let response = self.http.post(&url).headers(self.headers(&config.token)?)
-                .json(&body).send().await.map_err(NotionError::transport)?;
-            if !response.status().is_success() { return Err(response_error(response).await.0); }
-            let payload: Value = response.json().await.map_err(|_| protocol_error())?;
-            let pages = payload.get("results").and_then(Value::as_array).ok_or_else(protocol_error)?;
-            let has_more = payload.get("has_more").and_then(Value::as_bool).ok_or_else(protocol_error)?;
+            let mut body = json!({"page_size": 50, "filter": filter});
+            if let Some(cursor) = &cursor {
+                body["start_cursor"] = json!(cursor);
+            }
+            let response = self
+                .http
+                .post(&url)
+                .headers(self.headers(&config.token)?)
+                .json(&body)
+                .send()
+                .await
+                .map_err(NotionError::transport)?;
+            if !response.status().is_success() {
+                return Err(response_error(response).await.0);
+            }
+            let payload: Value = response
+                .json()
+                .await
+                .map_err(|err| if err.is_decode() { protocol_error() } else { NotionError::transport(err) })?;
+            let pages = payload
+                .get("results")
+                .and_then(Value::as_array)
+                .ok_or_else(protocol_error)?;
+            let has_more = payload
+                .get("has_more")
+                .and_then(Value::as_bool)
+                .ok_or_else(protocol_error)?;
             for page in pages {
                 validate_page(page, config)?;
-                if page_in_schedule_window(page, config, &today_str, &lookahead_str) {
-                    results.push(parse_page(page, config).ok_or_else(protocol_error)?);
+                if page_has_date(page, config) {
+                    results.push(parse_page_with_group(page, config).ok_or_else(protocol_error)?);
                 }
             }
-            if !has_more { break; }
-            let next = payload.get("next_cursor").and_then(Value::as_str)
-                .filter(|cursor| !cursor.trim().is_empty()).ok_or_else(protocol_error)?;
-            if !cursors.insert(next.to_owned()) { return Err(protocol_error()); }
+            on_progress(results.len());
+            if !has_more {
+                break;
+            }
+            let next = payload
+                .get("next_cursor")
+                .and_then(Value::as_str)
+                .filter(|cursor| !cursor.trim().is_empty())
+                .ok_or_else(protocol_error)?;
+            if !cursors.insert(next.to_owned()) {
+                return Err(protocol_error());
+            }
             cursor = Some(next.to_owned());
         }
         Ok(results)
+    }
+
+    pub async fn create_page(
+        &self,
+        config: &NotionConfig,
+        task: &Task,
+        group_name: Option<&str>,
+    ) -> Result<String, NotionError> {
+        Self::require_config(config)?;
+        let mut properties = build_write_properties(config, task, group_name, true);
+        let url = format!("{}/pages", self.base_url());
+        let parent = json!({"database_id": config.database_id.trim()});
+        for attempt in 0..3 {
+            let response = self
+                .http
+                .post(&url)
+                .headers(self.headers(&config.token)?)
+                .json(&json!({"parent": parent, "properties": properties}))
+                .send()
+                .await
+                .map_err(NotionError::transport)?;
+            if response.status().is_success() {
+                let body: Value = response
+                    .json()
+                    .await
+                    .map_err(|err| if err.is_decode() { protocol_error() } else { NotionError::transport(err) })?;
+                let id = body
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.trim().is_empty())
+                    .ok_or_else(protocol_error)?;
+                return Ok(crate::models::normalize_notion_id(id));
+            }
+            let (error, validation_message) = response_error(response).await;
+            if attempt < 2
+                && error.status == Some(400)
+                && error.code.as_deref() == Some("validation_error")
+                && adapt_validation_fallback(
+                    &mut properties,
+                    config,
+                    task,
+                    group_name,
+                    validation_message.as_deref(),
+                )
+            {
+                continue;
+            }
+            return Err(error);
+        }
+        Err(protocol_error())
+    }
+
+    pub async fn update_page(
+        &self,
+        config: &NotionConfig,
+        page_id: &str,
+        task: &Task,
+        group_name: Option<&str>,
+    ) -> Result<(), NotionError> {
+        Self::require_config(config)?;
+        let mut properties = build_write_properties(config, task, group_name, false);
+        for attempt in 0..3 {
+            let response = self.patch(config, page_id, &properties).await?;
+            if response.status().is_success() {
+                return Ok(());
+            }
+            let (error, validation_message) = response_error(response).await;
+            if attempt < 2
+                && error.status == Some(400)
+                && error.code.as_deref() == Some("validation_error")
+                && adapt_validation_fallback(
+                    &mut properties,
+                    config,
+                    task,
+                    group_name,
+                    validation_message.as_deref(),
+                )
+            {
+                continue;
+            }
+            return Err(error);
+        }
+        Ok(())
     }
 
     pub async fn set_done(&self, config: &NotionConfig, mapping: &NotionWriteMapping, page_id: &str, completed: bool) -> Result<(), NotionError> {
@@ -279,7 +385,7 @@ fn validate_page(page: &Value, config: &NotionConfig) -> Result<(), NotionError>
     valid().ok_or_else(protocol_error)
 }
 
-fn parse_page(page: &Value, config: &NotionConfig) -> Option<Task> {
+fn parse_page_with_group(page: &Value, config: &NotionConfig) -> Option<(Task, Option<String>)> {
     let id = page.get("id")?.as_str()?.to_string();
     let props = page.get("properties")?;
     let title = extract_title(props.get(&config.title_property))
@@ -323,7 +429,13 @@ fn parse_page(page: &Value, config: &NotionConfig) -> Option<Task> {
         start_time.as_deref(),
         end_time.as_deref(),
     );
-    let tags = extract_multi_select(props, &["tags", "Tags", "标签"]);
+    let default_tag_prop = config.default_tag_property.trim();
+    let tags = if default_tag_prop.is_empty() {
+        extract_multi_select(props, &["tags", "Tags", "标签"])
+    } else {
+        extract_multi_select(props, &[default_tag_prop, "tags", "Tags", "标签"])
+    };
+    let group_tag = extract_group_tag(props, config);
 
     let updated = page
         .get("last_edited_time")
@@ -332,25 +444,153 @@ fn parse_page(page: &Value, config: &NotionConfig) -> Option<Task> {
         .map(|dt| dt.timestamp_millis())
         .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
 
-    Some(Task {
-        id: id.clone(),
-        notion_id: Some(id),
-        title,
-        completed,
-        progress,
-        remain,
-        date,
-        start_date,
-        end_date,
-        start_time,
-        end_time,
-        reminder_at: None,
-        reminded_at: None,
-        tags,
-        updated_time: updated,
-        group_id: crate::models::NOTION_GROUP_ID.into(),
-        position: 0,
-    })
+    Some((
+        Task {
+            id: id.clone(),
+            notion_id: Some(id),
+            title,
+            completed,
+            progress,
+            remain,
+            date,
+            start_date,
+            end_date,
+            start_time,
+            end_time,
+            reminder_at: None,
+            reminded_at: None,
+            tags,
+            updated_time: updated,
+            group_id: crate::models::NOTION_GROUP_ID.into(),
+            position: 0,
+            sync_status: "synced".into(),
+        },
+        group_tag,
+    ))
+}
+
+fn build_notion_date_value(task: &Task) -> Value {
+    let Some(sd) = task.start_date.as_deref() else {
+        return Value::Null;
+    };
+    if let Some(st) = task.start_time.as_deref() {
+        let offset = chrono::Local::now().offset().to_string();
+        let start = format!("{sd}T{st}:00{offset}");
+        let end = if let Some(ed) = task.end_date.as_deref() {
+            let et = task.end_time.as_deref().unwrap_or(st);
+            Some(format!("{ed}T{et}:00{offset}"))
+        } else {
+            task.end_time
+                .as_deref()
+                .map(|et| format!("{sd}T{et}:00{offset}"))
+        };
+        json!({"start": start, "end": end})
+    } else {
+        let end = task.end_date.as_deref().filter(|ed| *ed != sd);
+        json!({"start": sd, "end": end})
+    }
+}
+
+fn build_write_properties(
+    config: &NotionConfig,
+    task: &Task,
+    group_name: Option<&str>,
+    is_create: bool,
+) -> Value {
+    let title_prop = if config.title_property.trim().is_empty() {
+        "Name"
+    } else {
+        config.title_property.trim()
+    };
+    let done_prop = if config.done_property.trim().is_empty() {
+        "done?"
+    } else {
+        config.done_property.trim()
+    };
+    let date_prop = if config.date_property.trim().is_empty() {
+        "Date"
+    } else {
+        config.date_property.trim()
+    };
+    let mut props = json!({
+        title_prop: {"title": [{"text": {"content": task.title}}]},
+        done_prop: {"checkbox": task.completed}
+    });
+    if task.start_date.is_some() {
+        props[date_prop] = json!({"date": build_notion_date_value(task)});
+    }
+    let status_prop = config.status_property.trim();
+    let status_name = if task.completed {
+        config.status_done_value.trim()
+    } else {
+        config.status_todo_value.trim()
+    };
+    if !status_prop.is_empty() && !status_name.is_empty() {
+        props[status_prop] = json!({"status": {"name": status_name}});
+    }
+    if is_create {
+        let tag_prop = config.default_tag_property.trim();
+        let tag_val = config.default_tag_value.trim();
+        if !tag_prop.is_empty() && !tag_val.is_empty() {
+            props[tag_prop] = json!({"select": {"name": tag_val}});
+        }
+    }
+    let group_prop = config.group_property.trim();
+    if !group_prop.is_empty() {
+        if let Some(name) = group_name.map(str::trim).filter(|s| !s.is_empty()) {
+            props[group_prop] = json!({"multi_select": [{"name": name}]});
+        } else if !is_create {
+            props[group_prop] = json!({"multi_select": []});
+        }
+    }
+    props
+}
+
+fn adapt_validation_fallback(
+    properties: &mut Value,
+    config: &NotionConfig,
+    task: &Task,
+    group_name: Option<&str>,
+    validation_message: Option<&str>,
+) -> bool {
+    let Some(msg) = validation_message else {
+        return false;
+    };
+    let status_prop = config.status_property.trim();
+    let status_name = if task.completed {
+        config.status_done_value.trim()
+    } else {
+        config.status_todo_value.trim()
+    };
+    if !status_prop.is_empty()
+        && !status_name.is_empty()
+        && msg == format!("{status_prop} is expected to be select.")
+    {
+        properties[status_prop] = json!({"select": {"name": status_name}});
+        return true;
+    }
+    let tag_prop = config.default_tag_property.trim();
+    let tag_val = config.default_tag_value.trim();
+    if !tag_prop.is_empty()
+        && !tag_val.is_empty()
+        && properties.get(tag_prop).is_some()
+        && msg == format!("{tag_prop} is expected to be multi_select.")
+    {
+        properties[tag_prop] = json!({"multi_select": [{"name": tag_val}]});
+        return true;
+    }
+    let group_prop = config.group_property.trim();
+    if !group_prop.is_empty()
+        && properties.get(group_prop).is_some()
+        && msg == format!("{group_prop} is expected to be select.")
+    {
+        properties[group_prop] = match group_name.map(str::trim).filter(|s| !s.is_empty()) {
+            Some(name) => json!({"select": {"name": name}}),
+            None => json!({"select": null}),
+        };
+        return true;
+    }
+    false
 }
 
 fn extract_title(prop: Option<&Value>) -> Option<String> {
@@ -477,62 +717,18 @@ fn date_property_names(config: &NotionConfig) -> [&str; 5] {
     [config.date_property.as_str(), "Date", "date", "日期", "Deadline"]
 }
 
-fn date_in_window(start: &str, end: Option<&str>, window_start: &str, window_end: &str) -> bool {
-    let end = end.unwrap_or(start);
-    start <= window_end && end >= window_start
-}
-
-/// True when today is within `[start, end]` (inclusive). Missing end ⇒ single-day task.
-#[cfg(test)]
-fn date_covers_today(start: &str, end: Option<&str>, today: &str) -> bool {
-    date_in_window(start, end, today, today)
-}
-
-fn page_in_schedule_window(
-    page: &Value,
-    config: &NotionConfig,
-    window_start: &str,
-    window_end: &str,
-) -> bool {
+fn page_has_date(page: &Value, config: &NotionConfig) -> bool {
     let Some(props) = page.get("properties") else {
         return false;
     };
     let names = date_property_names(config);
-    match extract_date_schedule(props, &names) {
-        Some(s) => date_in_window(&s.start_date, s.end_date.as_deref(), window_start, window_end),
-        None => false,
-    }
+    extract_date_schedule(props, &names).is_some()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{date_covers_today, extract_date_range};
+    use super::extract_date_range;
     use serde_json::json;
-
-    #[test]
-    fn single_day_matches_only_that_day() {
-        assert!(date_covers_today("2026-07-21", None, "2026-07-21"));
-        assert!(!date_covers_today("2026-07-20", None, "2026-07-21"));
-    }
-
-    #[test]
-    fn multi_day_range_includes_today_when_started_yesterday() {
-        assert!(date_covers_today(
-            "2026-07-20",
-            Some("2026-07-21"),
-            "2026-07-21"
-        ));
-        assert!(date_covers_today(
-            "2026-07-20",
-            Some("2026-07-22"),
-            "2026-07-21"
-        ));
-        assert!(!date_covers_today(
-            "2026-07-18",
-            Some("2026-07-20"),
-            "2026-07-21"
-        ));
-    }
 
     #[test]
     fn extract_date_range_reads_end() {
@@ -554,18 +750,33 @@ mod tests {
 
 fn extract_multi_select(props: &Value, names: &[&str]) -> Vec<String> {
     for name in names {
-        if let Some(arr) = props
-            .get(*name)
-            .and_then(|p| p.get("multi_select"))
-            .and_then(|v| v.as_array())
-        {
+        let Some(prop) = props.get(*name) else {
+            continue;
+        };
+        if let Some(arr) = prop.get("multi_select").and_then(|v| v.as_array()) {
             return arr
                 .iter()
                 .filter_map(|item| item.get("name").and_then(|v| v.as_str()).map(|s| s.to_string()))
                 .collect();
         }
+        if let Some(name) = prop.get("select").and_then(|v| v.get("name")).and_then(|v| v.as_str()) {
+            return vec![name.to_string()];
+        }
     }
     Vec::new()
+}
+
+fn extract_group_tag(props: &Value, config: &NotionConfig) -> Option<String> {
+    let prop_name = config.group_property.trim();
+    let candidates: Vec<&str> = if prop_name.is_empty() {
+        vec!["Tags 2", "Tag 2", "tags 2", "tag 2"]
+    } else {
+        vec![prop_name, "Tags 2", "Tag 2", "tags 2", "tag 2"]
+    };
+    extract_multi_select(props, &candidates)
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .find(|s| !s.is_empty())
 }
 
 #[cfg(test)]
@@ -602,7 +813,7 @@ mod http_tests {
         assert!(result[1].completed);
         let requests = fixture.requests();
         assert_eq!(requests.len(), 2);
-        assert_eq!(requests[0].body["page_size"], 100);
+        assert_eq!(requests[0].body["page_size"], 50);
         assert_eq!(requests[1].body["start_cursor"], "next");
     }
 
@@ -628,8 +839,8 @@ mod http_tests {
         assert!(result[0].progress.is_none());
         assert!(result[0].remain.is_none());
         let query = &fixture.requests()[0].body;
-        assert_eq!(query["filter"]["or"][0]["property"], "日期");
-        assert_eq!(query["filter"]["or"][1]["and"][0]["property"], "完成");
+        assert_eq!(query["filter"]["property"], "日期");
+        assert_eq!(query["filter"]["date"]["is_not_empty"], true);
     }
 
     #[tokio::test]
@@ -670,63 +881,77 @@ mod http_tests {
     }
 
     #[tokio::test]
-    async fn date_window_queries_sixty_days_and_filters_expired_ranges_after_http() {
-        let fixture = Fixture::new(|request| {
-            // Use the request's local day so crossing midnight cannot invalidate the fixture.
-            let today = chrono::NaiveDate::parse_from_str(
-                request.body["filter"]["or"][0]["date"]["equals"].as_str().unwrap(), "%Y-%m-%d",
-            ).unwrap();
-            let lookback = today - chrono::Duration::days(60);
-            let yesterday = today - chrono::Duration::days(1);
-            let mut current = page(PAGE, true);
-            current["properties"]["Date"]["date"] = json!({"start":today.to_string(),"end":null});
-            let mut spanning = page("22222222-2222-2222-2222-222222222222", false);
-            spanning["properties"]["Date"]["date"] = json!({
-                "start":format!("{lookback}T23:30:00.000-05:00"),
-                "end":format!("{today}T23:59:00.000+08:00")
+    async fn full_history_query_includes_old_completed_tasks_and_tags2_group() {
+        let fixture = Fixture::new(|_request| {
+            let mut old_done = page(PAGE, true);
+            old_done["properties"]["Date"]["date"] = json!({"start":"2026-01-10","end":null});
+            old_done["properties"]["Tags 2"] = json!({"multi_select":[{"name":"Learning"}]});
+            let mut upcoming = page("22222222-2222-2222-2222-222222222222", false);
+            upcoming["properties"]["Date"]["date"] = json!({
+                "start":"2026-12-01T11:00:00.000+08:00",
+                "end":"2026-12-01T15:00:00.000+08:00"
             });
-            let mut expired = page("33333333-3333-3333-3333-333333333333", false);
-            expired["properties"]["Date"]["date"] = json!({"start":yesterday.to_string(),"end":yesterday.to_string()});
-            Reply::ok(snapshot(vec![current, spanning, expired]))
+            Reply::ok(snapshot(vec![old_done, upcoming]))
         });
-        let tasks = NotionClient::with_base_url(fixture.url()).query_tasks(&config()).await.unwrap();
-        assert_eq!(tasks.iter().map(|task| task.id.as_str()).collect::<Vec<_>>(), [
-            PAGE, "22222222-2222-2222-2222-222222222222",
-        ]);
-        assert!(tasks[0].completed);
-        let requests = fixture.requests();
-        let filter = &requests[0].body["filter"]["or"];
-        let today = chrono::NaiveDate::parse_from_str(filter[0]["date"]["equals"].as_str().unwrap(), "%Y-%m-%d").unwrap();
-        assert_eq!(filter[1]["and"][0]["checkbox"]["equals"], false);
-        assert_eq!(filter[1]["and"][1]["date"]["on_or_before"], today.to_string());
-        assert_eq!(filter[1]["and"][2]["date"]["on_or_after"], (today - chrono::Duration::days(60)).to_string());
-        assert_eq!(tasks[1].date.as_deref(), Some(format!("{} → {today}", today - chrono::Duration::days(60)).as_str()));
-        assert_eq!(tasks[1].start_time.as_deref(), Some("23:30"));
-        assert_eq!(tasks[1].end_time.as_deref(), Some("23:59"));
+        let items = NotionClient::with_base_url(fixture.url())
+            .query_tasks_with_progress(&config(), |_| {})
+            .await
+            .unwrap();
+        assert_eq!(items.len(), 2);
+        assert!(items[0].0.completed);
+        assert_eq!(items[0].0.start_date.as_deref(), Some("2026-01-10"));
+        assert_eq!(items[0].1.as_deref(), Some("Learning"));
+        assert_eq!(items[1].0.start_time.as_deref(), Some("11:00"));
+        assert_eq!(items[1].0.end_time.as_deref(), Some("15:00"));
+        assert_eq!(items[1].1, None);
     }
 
     #[tokio::test]
-    async fn date_window_syncs_sixty_days_ahead_with_single_day_times() {
+    async fn create_and_update_page_write_event_tag_and_tags2_group_safely() {
         let fixture = Fixture::new(|request| {
-            let today = chrono::NaiveDate::parse_from_str(
-                request.body["filter"]["or"][0]["date"]["equals"].as_str().unwrap(), "%Y-%m-%d",
-            ).unwrap();
-            let upcoming = today + chrono::Duration::days(14);
-            let too_far = today + chrono::Duration::days(61);
-            let mut scheduled = page(PAGE, false);
-            scheduled["properties"]["Date"]["date"] = json!({
-                "start": format!("{upcoming}T11:00:00.000+08:00"),
-                "end": format!("{upcoming}T15:00:00.000+08:00")
-            });
-            let mut distant = page("44444444-4444-4444-4444-444444444444", false);
-            distant["properties"]["Date"]["date"] = json!({"start": too_far.to_string(), "end": null});
-            Reply::ok(snapshot(vec![scheduled, distant]))
+            if request.method == "POST" {
+                Reply::ok(json!({"id": PAGE}))
+            } else {
+                Reply::ok(json!({}))
+            }
         });
-        let tasks = NotionClient::with_base_url(fixture.url()).query_tasks(&config()).await.unwrap();
-        assert_eq!(tasks.len(), 1);
-        assert_eq!(tasks[0].start_time.as_deref(), Some("11:00"));
-        assert_eq!(tasks[0].end_time.as_deref(), Some("15:00"));
-        assert!(tasks[0].date.as_deref().unwrap().ends_with(" 11:00–15:00"));
+        let client = NotionClient::with_base_url(fixture.url());
+        let task = Task {
+            id: "local-t".into(),
+            notion_id: None,
+            title: "Read paper".into(),
+            completed: false,
+            progress: None,
+            remain: None,
+            date: Some("2026-11-28".into()),
+            start_date: Some("2026-11-28".into()),
+            end_date: None,
+            start_time: None,
+            end_time: None,
+            reminder_at: None,
+            reminded_at: None,
+            tags: Vec::new(),
+            updated_time: 10,
+            group_id: "g1".into(),
+            position: 0,
+            sync_status: "pending".into(),
+        };
+        let created_id = client.create_page(&config(), &task, Some("Research")).await.unwrap();
+        assert_eq!(created_id, crate::models::normalize_notion_id(PAGE));
+
+        let mut updated = task.clone();
+        updated.title = "Read paper v2".into();
+        updated.completed = true;
+        client.update_page(&config(), &created_id, &updated, Some("Learning")).await.unwrap();
+
+        let requests = fixture.requests();
+        assert_eq!(requests[0].method, "POST");
+        assert_eq!(requests[0].body["properties"]["Tags"]["select"]["name"], "event");
+        assert_eq!(requests[0].body["properties"]["Tags 2"]["multi_select"][0]["name"], "Research");
+        assert_eq!(requests[1].method, "PATCH");
+        assert!(requests[1].body["properties"].get("Tags").is_none());
+        assert_eq!(requests[1].body["properties"]["Tags 2"]["multi_select"][0]["name"], "Learning");
+        assert_eq!(requests[1].body["properties"]["done?"]["checkbox"], true);
     }
 
     #[tokio::test]
@@ -858,7 +1083,7 @@ mod http_tests {
         let query = tokio::spawn(async move { client.query_tasks(&config()).await });
         arrived.await.unwrap();
         tokio::time::pause();
-        tokio::time::advance(Duration::from_secs(20)).await;
+        tokio::time::advance(Duration::from_secs(45)).await;
         tokio::time::resume();
         let joined = query.await;
         let _ = release.send(());

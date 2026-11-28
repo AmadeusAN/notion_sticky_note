@@ -325,6 +325,19 @@ export async function apiCreateGroup(name: string): Promise<Group> {
   return invoke<Group>("create_group", { name });
 }
 
+export async function apiRenameGroup(id: string, name: string): Promise<Group> {
+  if (!isTauri()) {
+    return {
+      id,
+      name: name.trim(),
+      kind: "local",
+      position: 1,
+      createdAt: Date.now(),
+    };
+  }
+  return invoke<Group>("rename_group", { id, name });
+}
+
 export async function apiDeleteGroup(id: string): Promise<string[]> {
   if (!isTauri()) throw new Error("浏览器预览不支持删除分组");
   return invoke<string[]>("delete_group", { id });
@@ -361,9 +374,6 @@ export async function apiUpdateTask(id: string, update: TaskUpdateInput): Promis
     if (!previewTasksState) previewTasksState = buildPreviewTasks();
     const existing = previewTasksState.find((t) => t.id === id);
     if (!existing) throw new Error("任务不存在");
-    if (existing.notionId || existing.groupId === NOTION_GROUP_ID) {
-      throw new Error("来自 Notion 的同步任务请在 Notion 中编辑");
-    }
     if (update.updateSchedule) {
       const err = validateSchedule({
         startDate: update.startDate ?? null,
@@ -479,6 +489,10 @@ export async function apiGetSettings(): Promise<SettingsSnapshot> {
         statusProperty: "Status",
         statusDoneValue: "Done",
         statusTodoValue: "Not started",
+        syncLocalToNotion: true,
+        groupProperty: "Tags 2",
+        defaultTagProperty: "Tags",
+        defaultTagValue: "event",
       },
       },
     };
@@ -543,7 +557,8 @@ export async function apiListenSyncState(onState: (state: SyncState) => void): P
 
 function previewSyncState(): SyncState {
   return { seq: 0, cycleId: 0, status: "unconfigured", lastSuccessfulAt: null,
-    pendingCount: 0, unresolvedCount: 0, error: null, dataChanged: false };
+    pendingCount: 0, unresolvedCount: 0, error: null, dataChanged: false,
+    phase: "idle", progressCompleted: 0, progressTotal: 0, progressMessage: null };
 }
 
 export async function apiTestNotionConnection(
