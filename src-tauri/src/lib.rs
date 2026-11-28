@@ -476,6 +476,12 @@ async fn set_app_icon(
     app_icon::validate_payload(&payload)?;
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     app_icon::write_cached_rgba_files(&dir, &payload.rgba_128, &payload.rgba_32)?;
+    let ico_path = app_icon::write_versioned_ico(
+        &dir,
+        &payload.icon_id,
+        &payload.rgba_128,
+        &payload.rgba_32,
+    )?;
     state
         .db
         .save_app_icon(&payload.icon_id, payload.custom_data_url.as_deref())?;
@@ -490,7 +496,12 @@ async fn set_app_icon(
     let rgba_128 = payload.rgba_128;
     let rgba_32 = payload.rgba_32;
     app.run_on_main_thread(move || {
-        let _ = send.send(app_icon::apply_rgba_icon(&handle, rgba_128, rgba_32));
+        let _ = send.send(app_icon::apply_rgba_icon(
+            &handle,
+            rgba_128,
+            rgba_32,
+            Some(ico_path.as_path()),
+        ));
     })
     .map_err(|error| error.to_string())?;
     receive.await.map_err(|_| {
