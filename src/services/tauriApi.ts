@@ -1,8 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { AppearanceSettings, AppearanceSaveState, ExitAction, ExitSaveState, GalleryFeedConfig, Group, NotionConfig, RemoteGalleryItem, SaveNotionConfigOptions, SaveNotionConfigResult, SettingsSnapshot, SyncState, Task, TaskImportResult, TaskScheduleInput, TaskUpdateInput, TaskView, WindowMode } from "../types";
+import type { AppIconId, AppIconState, AppearanceSettings, AppearanceSaveState, ExitAction, ExitSaveState, GalleryFeedConfig, Group, NotionConfig, RemoteGalleryItem, SaveNotionConfigOptions, SaveNotionConfigResult, SettingsSnapshot, SyncState, Task, TaskImportResult, TaskScheduleInput, TaskUpdateInput, TaskView, WindowMode } from "../types";
 import { ARCHIVE_GROUP_ID, MOCK_TASKS, NOTION_GROUP_ID } from "../types";
 import { buildDateSummary, todayIso, offsetDateIso, validateSchedule } from "./taskDate";
+import { DEFAULT_APP_ICON_ID, normalizeAppIconId } from "./appIcons";
 import type { DockSnapshot } from "../fx/types";
 
 export async function apiGetAutostartEnabled(): Promise<boolean> {
@@ -75,6 +76,76 @@ export async function apiListenAlwaysOnTop(onPinned: (pinned: boolean) => void):
     return () => { previewPinListeners.delete(onPinned); };
   }
   return listen<boolean>("always-on-top-changed", (event) => onPinned(event.payload));
+}
+
+const PREVIEW_APP_ICON_ID_KEY = "sticky_preview_app_icon_id";
+const PREVIEW_APP_ICON_CUSTOM_KEY = "sticky_preview_app_icon_custom";
+const previewAppIconListeners = new Set<(state: AppIconState) => void>();
+
+export async function apiGetAppIcon(): Promise<AppIconState> {
+  if (!isTauri()) {
+    try {
+      const iconId = normalizeAppIconId(window.localStorage.getItem(PREVIEW_APP_ICON_ID_KEY));
+      const customDataUrl = window.localStorage.getItem(PREVIEW_APP_ICON_CUSTOM_KEY) || null;
+      return {
+        iconId: iconId === "custom" && !customDataUrl ? DEFAULT_APP_ICON_ID : iconId,
+        customDataUrl,
+      };
+    } catch {
+      return { iconId: DEFAULT_APP_ICON_ID, customDataUrl: null };
+    }
+  }
+  const raw = await invoke<{ iconId: string; customDataUrl: string | null }>("get_app_icon");
+  return {
+    iconId: normalizeAppIconId(raw.iconId),
+    customDataUrl: raw.customDataUrl ?? null,
+  };
+}
+
+export async function apiSetAppIcon(payload: {
+  iconId: AppIconId;
+  customDataUrl: string | null;
+  rgba128: number[];
+  rgba32: number[];
+}): Promise<AppIconState> {
+  if (!isTauri()) {
+    let prevCustom: string | null = null;
+    try {
+      prevCustom = window.localStorage.getItem(PREVIEW_APP_ICON_CUSTOM_KEY) || null;
+      window.localStorage.setItem(PREVIEW_APP_ICON_ID_KEY, payload.iconId);
+      if (payload.customDataUrl) {
+        window.localStorage.setItem(PREVIEW_APP_ICON_CUSTOM_KEY, payload.customDataUrl);
+      }
+    } catch {
+      // Ignore storage unavailability.
+    }
+    const next: AppIconState = {
+      iconId: normalizeAppIconId(payload.iconId),
+      customDataUrl: payload.customDataUrl ?? prevCustom,
+    };
+    for (const listener of previewAppIconListeners) listener(next);
+    return next;
+  }
+  const raw = await invoke<{ iconId: string; customDataUrl: string | null }>("set_app_icon", {
+    payload,
+  });
+  return {
+    iconId: normalizeAppIconId(raw.iconId),
+    customDataUrl: raw.customDataUrl ?? null,
+  };
+}
+
+export async function apiListenAppIcon(onIcon: (state: AppIconState) => void): Promise<UnlistenFn> {
+  if (!isTauri()) {
+    previewAppIconListeners.add(onIcon);
+    return () => { previewAppIconListeners.delete(onIcon); };
+  }
+  return listen<{ iconId: string; customDataUrl: string | null }>("app-icon-changed", (event) => {
+    onIcon({
+      iconId: normalizeAppIconId(event.payload.iconId),
+      customDataUrl: event.payload.customDataUrl ?? null,
+    });
+  });
 }
 
 export async function apiMinimizeMain(): Promise<void> {

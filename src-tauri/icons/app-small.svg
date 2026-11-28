@@ -1,7 +1,27 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
-  <path d="M156 24H356C445 24 488 67 488 156V356C488 445 445 488 356 488H156C67 488 24 445 24 356V156C24 67 67 24 156 24Z" fill="#1E2B2D"/>
-  <path d="M136 88H376C394 88 408 102 408 120V344L320 432H136C118 432 104 418 104 400V120C104 102 118 88 136 88Z" fill="#F7FAEE"/>
-  <path d="M320 432V368C320 352 328 344 344 344H408Z" fill="#BDD4C6"/>
-  <path d="M164 180H318" fill="none" stroke="#73847C" stroke-width="24" stroke-linecap="round"/>
-  <path d="M160 292L202 334L280 252" fill="none" stroke="#218B70" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+  <defs>
+    <linearGradient id="c3s_rim" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#88FFEA"/>
+      <stop offset="50%" stop-color="#70D6FF"/>
+      <stop offset="100%" stop-color="#FFD479"/>
+    </linearGradient>
+    <linearGradient id="c3s_front" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#DDFFF8"/>
+      <stop offset="50%" stop-color="#6BFFE4"/>
+      <stop offset="100%" stop-color="#38CFFF"/>
+    </linearGradient>
+    <linearGradient id="c3s_back" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#FFE6A8"/>
+      <stop offset="100%" stop-color="#FFB84D"/>
+    </linearGradient>
+  </defs>
+  <path d="M256,16 C400,16 496,16 496,256 C496,496 400,496 256,496 C112,496 16,496 16,256 C16,16 112,16 256,16 Z" fill="#050609"/>
+  <path d="M256,16 C400,16 496,16 496,256 C496,496 400,496 256,496 C112,496 16,496 16,256 C16,16 112,16 256,16 Z" fill="none" stroke="url(#c3s_rim)" stroke-width="14"/>
+  <rect x="158" y="88" width="224" height="288" rx="30" transform="rotate(8 270 232)" fill="#110E08" stroke="url(#c3s_back)" stroke-width="15"/>
+  <path d="M154,116 H308 L368,176 V382 C368,397 356,408 342,408 H154 C140,408 128,397 128,382 V142 C128,127 140,116 154,116 Z" fill="#06080D" stroke="url(#c3s_front)" stroke-width="18" stroke-linejoin="round"/>
+  <path d="M306,118 V178 H366" fill="none" stroke="#C8FFF4" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="196" cy="274" r="16" fill="#7AFFEA"/>
+  <circle cx="248" cy="274" r="16" fill="#FFD479"/>
+  <circle cx="300" cy="274" r="16" fill="#54D3FF"/>
+  <line x1="184" y1="330" x2="312" y2="330" stroke="#59A89F" stroke-width="16" stroke-linecap="round"/>
 </svg>

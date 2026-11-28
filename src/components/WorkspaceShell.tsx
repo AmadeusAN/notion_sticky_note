@@ -13,6 +13,7 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { ReminderAlert } from "./ReminderAlert";
 import { useTaskActions } from "./useTaskActions";
 import { apiHideWindow } from "../services/tauriApi";
+import { resolveAppIconDataUrl } from "../services/appIcons";
 import { todayIso } from "../services/taskDate";
 
 type WorkspaceView = "calendar" | "list" | "board";
@@ -35,6 +36,8 @@ export function WorkspaceShell({ onOpenSettings }: Props) {
 
   const maximized = useModeStore((s) => s.maximized);
   const alwaysOnTop = useModeStore((s) => s.alwaysOnTop);
+  const appIconId = useModeStore((s) => s.appIconId);
+  const customIconDataUrl = useModeStore((s) => s.customIconDataUrl);
   const switching = useModeStore((s) => s.switching);
   const modeError = useModeStore((s) => s.error);
   const clearModeError = useModeStore((s) => s.clearError);
@@ -123,6 +126,13 @@ export function WorkspaceShell({ onOpenSettings }: Props) {
               <path d="M9 4v16" />
             </svg>
           </button>
+          <img
+            className="workspace-brand-icon"
+            src={resolveAppIconDataUrl(appIconId, customIconDataUrl)}
+            alt=""
+            aria-hidden="true"
+            data-tauri-drag-region
+          />
           <span className="workspace-brand" data-tauri-drag-region>
             {l.t("Sticky Note 工作台")}
           </span>

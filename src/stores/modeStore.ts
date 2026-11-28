@@ -1,16 +1,34 @@
 import { create } from "zustand";
-import type { CalendarFocusStyle, GalleryFeedConfig, WindowMode } from "../types";
+import type {
+  AppIconId,
+  AppIconPresetId,
+  CalendarFocusStyle,
+  GalleryFeedConfig,
+  WindowMode,
+} from "../types";
 import {
   apiGetAlwaysOnTop,
+  apiGetAppIcon,
   apiGetWindowMode,
   apiIsMainMaximized,
   apiListenAlwaysOnTop,
+  apiListenAppIcon,
   apiListenWindowMode,
   apiMinimizeMain,
   apiSetAlwaysOnTop,
+  apiSetAppIcon,
   apiSetWindowMode,
   apiToggleMaximizeMain,
 } from "../services/tauriApi";
+import {
+  DEFAULT_APP_ICON_ID,
+  presetIconDataUrl,
+  rasterizeIconDataUrl,
+  readFileAsDataUrl,
+  resolveAppIconDataUrl,
+  syncDocumentFavicon,
+  validateCustomIconFile,
+} from "../services/appIcons";
 
 const FOCUS_STYLE_KEY = "sticky_calendar_focus_style";
 const FOCUS_SIZE_KEY = "sticky_calendar_focus_size";
@@ -117,6 +135,9 @@ interface ModeState {
   mode: WindowMode;
   maximized: boolean;
   alwaysOnTop: boolean;
+  appIconId: AppIconId;
+  customIconDataUrl: string | null;
+  appIconBusy: boolean;
   switching: boolean;
   error: string | null;
   calendarFocusStyle: CalendarFocusStyle;
@@ -127,6 +148,9 @@ interface ModeState {
   setMode: (mode: WindowMode) => Promise<void>;
   setAlwaysOnTop: (pinned: boolean) => Promise<boolean>;
   toggleAlwaysOnTop: () => Promise<boolean>;
+  selectAppIcon: (id: AppIconPresetId) => Promise<void>;
+  useSavedCustomAppIcon: () => Promise<void>;
+  uploadCustomAppIcon: (file: File) => Promise<void>;
   toggleMaximize: () => Promise<void>;
   minimize: () => Promise<void>;
   setCalendarFocusStyle: (style: CalendarFocusStyle) => void;
@@ -144,10 +168,17 @@ export function createModeStore() {
     initialFocusStyle === "mosaic" ? "mosaic" : "smooth";
   let pinRevision = 0;
 
+  const applyResolvedFavicon = (iconId: AppIconId, customDataUrl: string | null) => {
+    syncDocumentFavicon(resolveAppIconDataUrl(iconId, customDataUrl));
+  };
+
   return create<ModeState>((set, get) => ({
     mode: "workspace",
     maximized: false,
     alwaysOnTop: false,
+    appIconId: DEFAULT_APP_ICON_ID,
+    customIconDataUrl: null,
+    appIconBusy: false,
     switching: false,
     error: null,
     calendarFocusStyle: initialFocusStyle,
@@ -159,10 +190,12 @@ export function createModeStore() {
       let alive = true;
       let unlistenMode: (() => void) | null = null;
       let unlistenPin: (() => void) | null = null;
+      let unlistenIcon: (() => void) | null = null;
       const startPinRevision = pinRevision;
+      applyResolvedFavicon(get().appIconId, get().customIconDataUrl);
       void (async () => {
         try {
-          const [cleanupMode, cleanupPin] = await Promise.all([
+          const [cleanupMode, cleanupPin, cleanupIcon] = await Promise.all([
             apiListenWindowMode((nextMode) => {
               if (alive) set({ mode: nextMode, switching: false, error: null });
             }),
@@ -170,25 +203,40 @@ export function createModeStore() {
               pinRevision += 1;
               if (alive) set({ alwaysOnTop: pinned, error: null });
             }),
+            apiListenAppIcon((iconState) => {
+              if (alive) {
+                set({
+                  appIconId: iconState.iconId,
+                  customIconDataUrl: iconState.customDataUrl,
+                });
+                applyResolvedFavicon(iconState.iconId, iconState.customDataUrl);
+              }
+            }),
           ]);
           if (!alive) {
             cleanupMode();
             cleanupPin();
+            cleanupIcon();
             return;
           }
           unlistenMode = cleanupMode;
           unlistenPin = cleanupPin;
-          const [mode, maximized, alwaysOnTop] = await Promise.all([
+          unlistenIcon = cleanupIcon;
+          const [mode, maximized, alwaysOnTop, iconState] = await Promise.all([
             apiGetWindowMode(),
             apiIsMainMaximized(),
             apiGetAlwaysOnTop(),
+            apiGetAppIcon(),
           ]);
           if (alive) {
             set((state) => ({
               mode,
               maximized,
               alwaysOnTop: pinRevision === startPinRevision ? alwaysOnTop : state.alwaysOnTop,
+              appIconId: iconState.iconId,
+              customIconDataUrl: iconState.customDataUrl,
             }));
+            applyResolvedFavicon(iconState.iconId, iconState.customDataUrl);
           }
         } catch (error) {
           if (alive) set({ error: error instanceof Error ? error.message : String(error) });
@@ -198,8 +246,10 @@ export function createModeStore() {
         alive = false;
         unlistenMode?.();
         unlistenPin?.();
+        unlistenIcon?.();
         unlistenMode = null;
         unlistenPin = null;
+        unlistenIcon = null;
       };
     },
 
@@ -232,6 +282,91 @@ export function createModeStore() {
 
     toggleAlwaysOnTop: async () => {
       return get().setAlwaysOnTop(!get().alwaysOnTop);
+    },
+
+    selectAppIcon: async (id) => {
+      if (get().appIconBusy) return;
+      set({ appIconBusy: true, error: null });
+      try {
+        const dataUrl = presetIconDataUrl(id);
+        const { rgba128, rgba32 } = await rasterizeIconDataUrl(dataUrl);
+        const saved = await apiSetAppIcon({
+          iconId: id,
+          customDataUrl: null,
+          rgba128,
+          rgba32,
+        });
+        set({
+          appIconId: saved.iconId,
+          customIconDataUrl: saved.customDataUrl ?? get().customIconDataUrl,
+          appIconBusy: false,
+        });
+        applyResolvedFavicon(saved.iconId, saved.customDataUrl ?? get().customIconDataUrl);
+      } catch (error) {
+        set({
+          appIconBusy: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+    },
+
+    useSavedCustomAppIcon: async () => {
+      const existing = get().customIconDataUrl;
+      if (!existing || get().appIconBusy) return;
+      set({ appIconBusy: true, error: null });
+      try {
+        const { rgba128, rgba32, previewDataUrl } = await rasterizeIconDataUrl(existing);
+        const saved = await apiSetAppIcon({
+          iconId: "custom",
+          customDataUrl: previewDataUrl,
+          rgba128,
+          rgba32,
+        });
+        set({
+          appIconId: saved.iconId,
+          customIconDataUrl: saved.customDataUrl ?? previewDataUrl,
+          appIconBusy: false,
+        });
+        applyResolvedFavicon(saved.iconId, saved.customDataUrl ?? previewDataUrl);
+      } catch (error) {
+        set({
+          appIconBusy: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+    },
+
+    uploadCustomAppIcon: async (file) => {
+      const validationError = validateCustomIconFile(file);
+      if (validationError) {
+        throw new Error(validationError);
+      }
+      if (get().appIconBusy) return;
+      set({ appIconBusy: true, error: null });
+      try {
+        const rawDataUrl = await readFileAsDataUrl(file);
+        const { rgba128, rgba32, previewDataUrl } = await rasterizeIconDataUrl(rawDataUrl);
+        const saved = await apiSetAppIcon({
+          iconId: "custom",
+          customDataUrl: previewDataUrl,
+          rgba128,
+          rgba32,
+        });
+        set({
+          appIconId: saved.iconId,
+          customIconDataUrl: saved.customDataUrl ?? previewDataUrl,
+          appIconBusy: false,
+        });
+        applyResolvedFavicon(saved.iconId, saved.customDataUrl ?? previewDataUrl);
+      } catch (error) {
+        set({
+          appIconBusy: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
     },
 
     toggleMaximize: async () => {

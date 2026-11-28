@@ -17,6 +17,11 @@ import { useSettingsStore } from "../stores/settingsStore";
 import { useModeStore } from "../stores/modeStore";
 import { useToastStore } from "../stores/toastStore";
 import { apiFetchGalleryFeed } from "../services/tauriApi";
+import {
+  APP_ICON_PRESETS,
+  presetIconDataUrl,
+  resolveAppIconDataUrl,
+} from "../services/appIcons";
 import type { CalendarFocusStyle, GallerySource } from "../types";
 import { LanguageSettings } from "./LanguageSettings";
 import { AutostartSettings } from "./AutostartSettings";
@@ -149,6 +154,13 @@ export function SettingsPanel({ onClose }: Props) {
   const setCalendarFocusStyle = useModeStore((s) => s.setCalendarFocusStyle);
   const calendarFocusSize = useModeStore((s) => s.calendarFocusSize);
   const setCalendarFocusSize = useModeStore((s) => s.setCalendarFocusSize);
+  const appIconId = useModeStore((s) => s.appIconId);
+  const customIconDataUrl = useModeStore((s) => s.customIconDataUrl);
+  const appIconBusy = useModeStore((s) => s.appIconBusy);
+  const selectAppIcon = useModeStore((s) => s.selectAppIcon);
+  const useSavedCustomAppIcon = useModeStore((s) => s.useSavedCustomAppIcon);
+  const uploadCustomAppIcon = useModeStore((s) => s.uploadCustomAppIcon);
+  const iconFileInputRef = useRef<HTMLInputElement>(null);
   const galleryConfig = useModeStore((s) => s.galleryConfig);
   const updateGalleryConfig = useModeStore((s) => s.updateGalleryConfig);
   const pushToast = useToastStore((s) => s.pushToast);
@@ -287,6 +299,135 @@ export function SettingsPanel({ onClose }: Props) {
                   systemMode={systemMode}
                   onPick={(id) => commitAppearance(() => setDarkThemeLocal(id))}
                 />
+              </div>
+
+              <div className="settings-subcard app-icon-section">
+                <div className="app-icon-head">
+                  <div className="app-icon-head-left">
+                    <img
+                      className="app-icon-current-preview"
+                      src={resolveAppIconDataUrl(appIconId, customIconDataUrl)}
+                      alt={l.t("应用图标")}
+                    />
+                    <div>
+                      <label style={{ marginBottom: 2 }}>{l.t("应用图标")}</label>
+                      <p className="hint" style={{ margin: 0 }}>
+                        {l.t("含 3 款深色与 4 款浅色无框预设，也可上传自定义图片，实时应用到窗口与托盘。")}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="ghost-btn app-icon-upload-btn"
+                    disabled={appIconBusy}
+                    onClick={() => iconFileInputRef.current?.click()}
+                  >
+                    {l.t("上传图标")}
+                  </button>
+                </div>
+
+                <input
+                  ref={iconFileInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/svg+xml,image/x-icon,.ico"
+                  style={{ display: "none" }}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = "";
+                    if (!file) return;
+                    void uploadCustomAppIcon(file)
+                      .then(() => pushToast(l.t("已切换为自定义应用图标")))
+                      .catch((err) => {
+                        pushToast(l.errorText(err), "error");
+                      });
+                  }}
+                />
+
+                <div className="app-icon-grid" role="group" aria-label={l.t("应用图标预设")}>
+                  {APP_ICON_PRESETS.map((preset) => {
+                    const active = appIconId === preset.id;
+                    return (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        className={`app-icon-card${active ? " active" : ""}`}
+                        aria-pressed={active}
+                        disabled={appIconBusy}
+                        onClick={() => {
+                          void selectAppIcon(preset.id)
+                            .then(() =>
+                              pushToast(
+                                l.t("已切换图标为「{name}」", { name: preset.shortLabel }),
+                              ),
+                            )
+                            .catch((err) => pushToast(l.errorText(err), "error"));
+                        }}
+                      >
+                        <div className={`app-icon-thumb is-${preset.mode}`}>
+                          <img src={presetIconDataUrl(preset.id)} alt={l.t(preset.labelKey)} />
+                        </div>
+                        <span className="app-icon-name">{l.t(preset.labelKey)}</span>
+                      </button>
+                    );
+                  })}
+
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    className={`app-icon-card app-icon-upload-card${appIconId === "custom" ? " active" : ""}`}
+                    aria-pressed={appIconId === "custom"}
+                    aria-label={l.t("自定义图标")}
+                    onClick={() => {
+                      if (appIconBusy) return;
+                      if (customIconDataUrl) {
+                        void useSavedCustomAppIcon()
+                          .then(() => pushToast(l.t("已切换为自定义应用图标")))
+                          .catch((err) => pushToast(l.errorText(err), "error"));
+                      } else {
+                        iconFileInputRef.current?.click();
+                      }
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        if (appIconBusy) return;
+                        if (customIconDataUrl) {
+                          void useSavedCustomAppIcon()
+                            .then(() => pushToast(l.t("已切换为自定义应用图标")))
+                            .catch((err) => pushToast(l.errorText(err), "error"));
+                        } else {
+                          iconFileInputRef.current?.click();
+                        }
+                      }
+                    }}
+                  >
+                    <div className="app-icon-thumb is-custom">
+                      {customIconDataUrl ? (
+                        <img src={customIconDataUrl} alt={l.t("自定义图标")} />
+                      ) : (
+                        <span className="app-icon-plus" aria-hidden="true">＋</span>
+                      )}
+                    </div>
+                    <div className="app-icon-custom-footer">
+                      <span className="app-icon-name">
+                        {customIconDataUrl ? l.t("自定义图标") : l.t("上传自定义")}
+                      </span>
+                      {customIconDataUrl ? (
+                        <button
+                          type="button"
+                          className="app-icon-replace-btn"
+                          disabled={appIconBusy}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            iconFileInputRef.current?.click();
+                          }}
+                        >
+                          {l.t("更换")}
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <div className="settings-grid-2">

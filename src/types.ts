@@ -7,6 +7,7 @@ export type { ThemeId } from "./themes";
 export type { FontId } from "./fonts";
 export type { FxThemeId } from "./fx/themes";
 export type { DockHandleId } from "./dockHandles";
+export type { AppIconPresetId, AppIconId, AppIconState } from "./services/appIcons";
 
 export interface Task {
   id: string;

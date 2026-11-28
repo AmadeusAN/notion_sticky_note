@@ -2,12 +2,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../services/tauriApi", () => ({
   apiGetAlwaysOnTop: vi.fn(),
+  apiGetAppIcon: vi.fn(),
   apiGetWindowMode: vi.fn(),
   apiIsMainMaximized: vi.fn(),
   apiListenAlwaysOnTop: vi.fn(),
+  apiListenAppIcon: vi.fn(),
   apiListenWindowMode: vi.fn(),
   apiMinimizeMain: vi.fn(),
   apiSetAlwaysOnTop: vi.fn(),
+  apiSetAppIcon: vi.fn(),
   apiSetWindowMode: vi.fn(),
   apiToggleMaximizeMain: vi.fn(),
 }));
@@ -25,22 +28,29 @@ describe("modeStore", () => {
     window.localStorage.removeItem("sticky_gallery_config");
     store = createModeStore();
     vi.mocked(api.apiGetAlwaysOnTop).mockResolvedValue(false);
+    vi.mocked(api.apiGetAppIcon).mockResolvedValue({ iconId: "c3", customDataUrl: null });
     vi.mocked(api.apiGetWindowMode).mockResolvedValue("workspace");
     vi.mocked(api.apiIsMainMaximized).mockResolvedValue(false);
     vi.mocked(api.apiListenAlwaysOnTop).mockResolvedValue(() => {});
+    vi.mocked(api.apiListenAppIcon).mockResolvedValue(() => {});
     vi.mocked(api.apiListenWindowMode).mockResolvedValue(() => {});
     vi.mocked(api.apiSetAlwaysOnTop).mockImplementation(async (pinned) => pinned);
+    vi.mocked(api.apiSetAppIcon).mockImplementation(async (payload) => ({
+      iconId: payload.iconId,
+      customDataUrl: payload.customDataUrl,
+    }));
     vi.mocked(api.apiSetWindowMode).mockImplementation(async (mode) => mode);
     vi.mocked(api.apiToggleMaximizeMain).mockResolvedValue(true);
     vi.mocked(api.apiMinimizeMain).mockResolvedValue();
   });
 
-  it("hydrates initial mode and alwaysOnTop and toggles across modes", async () => {
+  it("hydrates initial mode, appIconId and alwaysOnTop and toggles across modes", async () => {
     const disconnect = store.getState().connectWindowMode();
     await Promise.resolve();
     await Promise.resolve();
     expect(store.getState().mode).toBe("workspace");
     expect(store.getState().alwaysOnTop).toBe(false);
+    expect(store.getState().appIconId).toBe("c3");
 
     await store.getState().toggleAlwaysOnTop();
     expect(api.apiSetAlwaysOnTop).toHaveBeenCalledWith(true);

@@ -1,3 +1,4 @@
+mod app_icon;
 mod autostart;
 mod database;
 mod edge_dock;
@@ -458,6 +459,49 @@ async fn set_always_on_top(pinned: bool, app: AppHandle) -> Result<bool, String>
 }
 
 #[tauri::command]
+fn get_app_icon(state: State<'_, AppState>) -> Result<app_icon::AppIconState, String> {
+    let (icon_id, custom_data_url) = state.db.load_app_icon()?;
+    Ok(app_icon::AppIconState {
+        icon_id,
+        custom_data_url,
+    })
+}
+
+#[tauri::command]
+async fn set_app_icon(
+    payload: app_icon::SetAppIconPayload,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<app_icon::AppIconState, String> {
+    app_icon::validate_payload(&payload)?;
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    app_icon::write_cached_rgba_files(&dir, &payload.rgba_128, &payload.rgba_32)?;
+    state
+        .db
+        .save_app_icon(&payload.icon_id, payload.custom_data_url.as_deref())?;
+    let (icon_id, custom_data_url) = state.db.load_app_icon()?;
+    let next = app_icon::AppIconState {
+        icon_id,
+        custom_data_url,
+    };
+
+    let (send, receive) = tokio::sync::oneshot::channel();
+    let handle = app.clone();
+    let rgba_128 = payload.rgba_128;
+    let rgba_32 = payload.rgba_32;
+    app.run_on_main_thread(move || {
+        let _ = send.send(app_icon::apply_rgba_icon(&handle, rgba_128, rgba_32));
+    })
+    .map_err(|error| error.to_string())?;
+    receive.await.map_err(|_| {
+        language::text("Unable to apply application icon.", "应用图标切换失败。").to_string()
+    })??;
+
+    let _ = app.emit_to("main", "app-icon-changed", &next);
+    Ok(next)
+}
+
+#[tauri::command]
 fn minimize_main(app: AppHandle) -> Result<(), String> {
     let win = window::main_window(&app)?;
     win.minimize().map_err(|e| e.to_string())
@@ -796,6 +840,7 @@ pub fn run() {
             }
 
             setup_tray(app.handle())?;
+            app_icon::restore_saved_icon_on_startup(app.handle(), &db);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -829,6 +874,8 @@ pub fn run() {
             set_window_mode,
             get_always_on_top,
             set_always_on_top,
+            get_app_icon,
+            set_app_icon,
             minimize_main,
             toggle_maximize_main,
             is_main_maximized,

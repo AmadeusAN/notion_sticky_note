@@ -564,6 +564,28 @@ impl Database {
         self.set_setting("always_on_top", if pinned { "true" } else { "false" })
     }
 
+    pub fn load_app_icon(&self) -> Result<(String, Option<String>), String> {
+        let raw_id = self.get_setting("app_icon_id")?;
+        let icon_id = raw_id
+            .as_deref()
+            .map(crate::app_icon::normalize_icon_id)
+            .unwrap_or(crate::app_icon::DEFAULT_APP_ICON_ID)
+            .to_string();
+        let custom_data_url = self
+            .get_setting("app_icon_custom_data_url")?
+            .filter(|v| !v.is_empty());
+        Ok((icon_id, custom_data_url))
+    }
+
+    pub fn save_app_icon(&self, icon_id: &str, custom_data_url: Option<&str>) -> Result<(), String> {
+        let normalized = crate::app_icon::normalize_icon_id(icon_id);
+        self.set_setting("app_icon_id", normalized)?;
+        if let Some(url) = custom_data_url.filter(|v| !v.is_empty()) {
+            self.set_setting("app_icon_custom_data_url", url)?;
+        }
+        Ok(())
+    }
+
     pub fn load_workspace_geometry(&self) -> Result<Option<WorkspaceGeometry>, String> {
         self.get_setting("workspace_geometry")?
             .map(|raw| {
@@ -3030,5 +3052,17 @@ mod tests {
         assert!(db.load_always_on_top().unwrap());
         db.save_always_on_top(false).unwrap();
         assert!(!db.load_always_on_top().unwrap());
+
+        assert_eq!(db.load_app_icon().unwrap(), ("c3".to_string(), None));
+        db.save_app_icon("custom", Some("data:image/png;base64,AAA")).unwrap();
+        assert_eq!(
+            db.load_app_icon().unwrap(),
+            ("custom".to_string(), Some("data:image/png;base64,AAA".to_string()))
+        );
+        db.save_app_icon("l3a", None).unwrap();
+        assert_eq!(
+            db.load_app_icon().unwrap(),
+            ("l3a".to_string(), Some("data:image/png;base64,AAA".to_string()))
+        );
     }
 }
